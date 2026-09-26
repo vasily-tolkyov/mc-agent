@@ -1,0 +1,26 @@
+{
+  "output": "D:\\kimi_kairos\\mc-agent\\runs\\2026-09-24T09-42-35-501Z-81831877",
+  "session": "D:\\kimi_kairos\\mc-agent\\runs\\2026-09-24T09-42-35-501Z-81831877\\session.json.gz",
+  "minecraft": {
+    "host": "127.0.0.1",
+    "port": 25567,
+    "version": "1.21.4",
+    "username": "KairosLocalBot",
+    "worldId": "mc-local-world-v1"
+  },
+  "updatedAt": "2026-09-24T09:48:38.570Z",
+  "stats": {
+    "decisions": 1424,
+    "executed": 1384,
+    "writes": 7313,
+    "passiveWindows": 5929,
+    "passiveWrites": 5929,
+    "pendingGoals": 0,
+    "verifiedGoals": [],
+    "investigating": "investigation-317",
+    "retainedPlaces": 264,
+    "retainedSurfaces": 512,
+    "observations": 2764,
+    "visibleSurfaces": 1
+  }
+}

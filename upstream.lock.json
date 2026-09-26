@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/vasily-tolkyov/kairos-v5-predictive-agent",
+  "branch": "main",
+  "commit": "fb3c40a8e172e092ca6ba9a69eebc2836e255b36",
+  "checkedAt": "2026-09-23",
+  "packageVersion": "0.4.0",
+  "entry": "dist/src/prototype.js",
+  "sessionVersion": "ExperienceSession1",
+  "mediumVersion": "KairosExperienceMediumV11"
+}

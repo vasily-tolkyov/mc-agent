@@ -1,0 +1,14 @@
+[
+  {
+    "Path": "D:\\kimi_kairos\\mc-agent\\legacy\\concept-agent.cjs",
+    "Hash": "BB22A10811821B9B8E501B9956B09A96C4CB90FA33EF02B3A6F89B9D82B80E87"
+  },
+  {
+    "Path": "D:\\kimi_kairos\\mc-agent\\legacy\\interactive-agent.cjs",
+    "Hash": "6D3C21BD12728C2C18EEA3F873AD6E0BF4B30EF9E213AC56315EDD570040DDB1"
+  },
+  {
+    "Path": "D:\\kimi_kairos\\mc-agent\\legacy\\live-agent.cjs",
+    "Hash": "0EA88AE199C989B8D8ABF171D72A1D7EEF083823BD51D6DA999877CF9B0B370F"
+  }
+]

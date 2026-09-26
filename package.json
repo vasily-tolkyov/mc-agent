@@ -1,0 +1,31 @@
+{
+  "name": "mc-agent",
+  "version": "2.0.0",
+  "description": "Local Minecraft client display with the pinned Kairos experience runtime",
+  "main": "local-agent.mjs",
+  "scripts": {
+    "start": "node local-agent.mjs",
+    "check": "node local-agent.mjs --check",
+    "build:core": "npm --prefix ../kairos-v5-predictive-agent run build && node scripts/core-build-lock.mjs --record",
+    "test": "node --test test/*.test.mjs",
+    "test:core": "npm --prefix ../kairos-v5-predictive-agent run test:next-stage",
+    "server:start": "node scripts/local-server.mjs start",
+    "server:stop": "node scripts/local-server.mjs stop",
+    "server:status": "node scripts/local-server.mjs status",
+    "proxy:start": "node scripts/local-proxy.mjs start",
+    "proxy:stop": "node scripts/local-proxy.mjs stop",
+    "doctor": "node scripts/local-doctor.mjs",
+    "observe": "node scripts/local-server.mjs observe",
+    "instruct": "node send-instruction.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "canvas": "^3.2.3",
+    "mineflayer": "^4.39.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.33.0"
+  }
+}

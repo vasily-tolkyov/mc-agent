@@ -1,0 +1,27 @@
+{
+  "before": {
+    "phase": "running",
+    "decisions": 26,
+    "writes": 90
+  },
+  "goalStatus": 202,
+  "invalidJsonStatus": 400,
+  "goal": {
+    "version": "GroundedGoalV1",
+    "id": "migration-already-measured",
+    "expression": {
+      "predicate": {
+        "lower": -2.8,
+        "subject": {
+          "kind": "self"
+        },
+        "version": "GoalPredicateV1",
+        "observable": "position.0",
+        "id": "current-x",
+        "upper": -2.2,
+        "comparator": "within"
+      },
+      "kind": "predicate"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "pid": 15764,
+  "run": "native-resumed-20260923-042752",
+  "stdout": "D:\\kimi_kairos\\mc-agent\\runtime\\native-resumed-20260923-042752.stdout.log",
+  "stderr": "D:\\kimi_kairos\\mc-agent\\runtime\\native-resumed-20260923-042752.stderr.log",
+  "restore": "D:\\kimi_kairos\\mc-agent\\runs\\native-live-20260923\\session.json.gz"
+}

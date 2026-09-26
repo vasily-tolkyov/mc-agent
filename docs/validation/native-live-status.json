@@ -1,0 +1,89 @@
+{
+  "phase": "running",
+  "pauseRequested": false,
+  "upstream": "fb3c40a8e172e092ca6ba9a69eebc2836e255b36",
+  "minecraft": {
+    "host": "127.0.0.1",
+    "port": 25567,
+    "version": "1.21.4",
+    "username": "KairosLocalBot",
+    "worldId": "mc-local-world-v1"
+  },
+  "output": "D:\\kimi_kairos\\mc-agent\\runs\\native-live-20260923",
+  "seconds": 60.249,
+  "decisions": 86,
+  "executed": 80,
+  "writes": 300,
+  "passiveWindows": 220,
+  "passiveWrites": 220,
+  "pendingGoals": 0,
+  "verifiedGoals": [
+    "migration-already-measured"
+  ],
+  "investigating": null,
+  "retainedPlaces": 23,
+  "retainedSurfaces": 184,
+  "observations": 167,
+  "visibleSurfaces": 6,
+  "observation": {
+    "sequence": 1151,
+    "self": {
+      "position": [
+        1.4669444808947023,
+        118.79673560066871,
+        6.759049606036008
+      ],
+      "yaw": 3.4033920413889427,
+      "pitch": -0.7853981633974809,
+      "properties": {
+        "onGround": false,
+        "health": 20,
+        "food": 20,
+        "selectedSlot": 4,
+        "heldItem": null,
+        "gameMode": "survival",
+        "velocityX": 0.03368438224232019,
+        "velocityY": -0.30153472366278034,
+        "velocityZ": 0.12571182594990973
+      }
+    }
+  },
+  "tasks": [
+    {
+      "goal": {
+        "version": "GroundedGoalV1",
+        "id": "migration-already-measured",
+        "expression": {
+          "predicate": {
+            "lower": -2.8,
+            "subject": {
+              "kind": "self"
+            },
+            "version": "GoalPredicateV1",
+            "observable": "position.0",
+            "id": "current-x",
+            "upper": -2.2,
+            "comparator": "within"
+          },
+          "kind": "predicate"
+        }
+      },
+      "status": "verified",
+      "actions": 0,
+      "bestResidual": 0
+    }
+  ],
+  "lastDecision": {
+    "index": 86,
+    "status": "executed",
+    "source": "curiosity",
+    "goalId": null,
+    "action": "look",
+    "planLength": 0,
+    "learned": true,
+    "exploration": {
+      "source": "curiosity",
+      "planLength": 0
+    }
+  }
+}

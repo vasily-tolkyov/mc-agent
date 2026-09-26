@@ -1,0 +1,84 @@
+{
+  "checkedAt": "2026-09-23T11:06:25.803Z",
+  "clients": [
+    {
+      "version": "26.2",
+      "type": "release",
+      "requiredJava": 25
+    },
+    {
+      "version": "26.3",
+      "type": "release",
+      "requiredJava": 25
+    },
+    {
+      "version": "26.3-snapshot-9",
+      "type": "snapshot",
+      "requiredJava": 25
+    },
+    {
+      "version": "26.4-snapshot-1",
+      "type": "snapshot",
+      "requiredJava": 25
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "localServer",
+      "address": "127.0.0.1:25567",
+      "reachable": true,
+      "requestedProtocol": 769,
+      "version": {
+        "name": "1.21.4",
+        "protocol": 769
+      },
+      "players": {
+        "max": 8,
+        "online": 2,
+        "sample": [
+          {
+            "id": "98838eab-908f-35ec-a195-f40752162f88",
+            "name": "KairosLocalBot"
+          },
+          {
+            "id": "be579291-19d3-3256-bd2d-2a9502b3757d",
+            "name": "Vtolkyov"
+          }
+        ]
+      },
+      "description": "Kairos Local - Minecraft 1.21.4",
+      "latencyMs": 13
+    },
+    {
+      "name": "nativeClientProxy",
+      "address": "127.0.0.1:25568",
+      "reachable": true,
+      "requestedProtocol": 777,
+      "version": {
+        "name": "1.21.4",
+        "protocol": 777
+      },
+      "players": {
+        "max": 8,
+        "online": 2,
+        "sample": [
+          {
+            "id": "98838eab-908f-35ec-a195-f40752162f88",
+            "name": "KairosLocalBot"
+          },
+          {
+            "id": "be579291-19d3-3256-bd2d-2a9502b3757d",
+            "name": "Vtolkyov"
+          }
+        ]
+      },
+      "description": "Kairos Local - Minecraft 1.21.4",
+      "latencyMs": 18
+    }
+  ],
+  "connect": {
+    "1.21.4": "127.0.0.1:25567",
+    "26.3": "127.0.0.1:25568"
+  },
+  "note": "Status ping verifies protocol availability. A successful native game login and visible world are separate checks."
+}

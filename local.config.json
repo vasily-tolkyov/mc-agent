@@ -1,0 +1,14 @@
+{
+  "coreDirectory": "../kairos-v5-predictive-agent",
+  "minecraft": {
+    "host": "127.0.0.1",
+    "port": 25567,
+    "version": "1.21.4",
+    "username": "KairosLocalBot",
+    "worldId": "mc-local-world-v1"
+  },
+  "controlPort": 3008,
+  "actions": 1024,
+  "seconds": 3600,
+  "checkpointEvery": 16
+}
