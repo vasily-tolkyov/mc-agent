@@ -25,7 +25,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createBody, ACTION_NAMES } from './mind/body.mjs';
 import { sensoryFrame, SENSORY_DIMS, DIM_NAMES, BLOCK_IDS, raycastForward } from './mind/sensory.mjs';
 import { RetinaStream, retinaGrid } from './mind/retina.mjs';
@@ -44,7 +44,7 @@ const NET_SUBSTRATE = process.env.NET_SUBSTRATE ?? 'binary';
 const NetClass = NET_SUBSTRATE === 'spiking' ? SpikingEnergyNetwork : null;
 if (NetClass) setR3NetClass(NetClass);
 
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { SensoryEncoder } = await imp('dist/src/pop/concept/sensory.js');
 const { ConceptFormation } = await imp('dist/src/pop/concept/formation.js');

@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { EpisodeBuffer } from './mind/r1-episodes.mjs';
 import { DifferentialExtractor } from './mind/r2-diff.mjs';
 import { FactorRuleNet } from './mind/r3-rules.mjs';
-import { pathToFileURL } from 'node:url';
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { TransitionMemory } = await imp('dist/src/planning/transition-memory.js');
 const CONCEPT_CAPS = { nearDist: 8, nearType: 13, belowType: 13, grip: 8, logGrip: 8, speed: 8, onGround: 2, viewWell: 14, itemDist: 9, itemType: 13, itemBearing: 9 };

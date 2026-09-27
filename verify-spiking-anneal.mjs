@@ -2,8 +2,8 @@
  * 覆盖：① 默认退火（带 wells）② fallbackQuietOnly+quenchCandidatesOnly（池 DI，WTA 场景）
  * ③ 多种子 ④ 含交换移动的 quietOnly 路径。运行：node verify-spiking-anneal.mjs
  */
-import { pathToFileURL } from 'node:url';
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { EnergyNetwork } = await imp('dist/src/index.js');
 const { mulberry32 } = await imp('dist/src/prng.js');

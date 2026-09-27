@@ -3,8 +3,8 @@
  * hebbianLearn 后全部边一致；runStep 账本一致；载体场断言全程开启（自证恒等）。
  * 运行：node verify-spiking-equiv.mjs
  */
-import { pathToFileURL } from 'node:url';
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { EnergyNetwork, hebbianLearn } = await imp('dist/src/index.js');
 const { mulberry32 } = await imp('dist/src/prng.js');

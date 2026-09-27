@@ -3,8 +3,8 @@
  * B: verify-r123 的 4/4 判定在脉冲底座上完全一致（同种子退火 ⇒ 同激活集/能量）。
  * 运行：node verify-spiking-structures.mjs
  */
-import { pathToFileURL } from 'node:url';
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { SensoryEncoder, iou } = await imp('dist/src/pop/concept/sensory.js');
 const { ConceptFormation } = await imp('dist/src/pop/concept/formation.js');

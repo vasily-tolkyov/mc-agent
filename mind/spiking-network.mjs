@@ -18,9 +18,9 @@
  * - tauLeak：膜电压泄漏时间常数（只影响示波层 V 的读数，不进决策）。
  * 示波层（V/脉冲事件流）是语义翻转的物理承载与观察窗，可导出做放电光栅分析。
  */
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const { mulberry32 } = await import(pathToFileURL(`${ENS}/dist/src/prng.js`).href);
 
 /** 稀疏边存储（语义与 energy-network-sim/src/sparse.ts 逐位一致） */

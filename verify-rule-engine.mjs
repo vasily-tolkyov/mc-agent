@@ -2,8 +2,8 @@
  * 验证 TransitionMemory 在封顶后能观察、预测、规划（修复前首次规划即分配 37GB 崩溃）。
  * 运行：node verify-rule-engine.mjs
  */
-import { pathToFileURL } from 'node:url';
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { TransitionMemory } = await imp('dist/src/planning/transition-memory.js');
 const { planGoal } = await imp('dist/src/planning/planner.js');

@@ -6,12 +6,12 @@
  * 运行：node verify-ab.mjs [episodes路径]
  */
 import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EpisodeBuffer } from './mind/r1-episodes.mjs';
 import { DifferentialExtractor } from './mind/r2-diff.mjs';
 import { FactorRuleNet } from './mind/r3-rules.mjs';
 
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { TransitionMemory } = await imp('dist/src/planning/transition-memory.js');
 

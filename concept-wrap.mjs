@@ -1,7 +1,7 @@
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const { SensoryEncoder } = await import(pathToFileURL(ENS + '/dist/src/pop/concept/sensory.js').href);
 const { ConceptFormation } = await import(pathToFileURL(ENS + '/dist/src/pop/concept/formation.js').href);
 const { EmergentMap } = await import(pathToFileURL(ENS + '/dist/src/pop/concept/emergent-map.js').href);

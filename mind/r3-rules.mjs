@@ -10,9 +10,9 @@
  *
  * 读出 = 规划链的"反查"接口：钳置查询帧 → 退火 → 获胜核 → 读其规则的因素与结果。
  */
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const ENS = 'D:/kimi_kairos/energy-network-sim';
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { EnergyNetwork } = await imp('dist/src/network.js');
 const { SensoryEncoder } = await imp('dist/src/pop/concept/sensory.js');
