@@ -59,24 +59,30 @@ const hardOf = (r) => r.hard ?? r.factors ?? {};
 const softOf = (r) => r.soft ?? {};
 const hardSat = (r, frame) => Object.entries(hardOf(r)).every(([d, v]) => sat1(frame[d], v));
 
-export function planBackward({ rules, current, goalDims, maxDepth = 6 }) {
+export function planBackward({ rules, current, goalDims, maxDepth = 6, exclude = null }) {
   const visited = new Set();
+  const excluded = exclude ?? new Set();
+  const ruleKey = (r) => `${r.action}|${JSON.stringify(r.outcomes)}`;
   const search = (targets, frame, depth) => {
     if (satisfied(frame, targets)) return { steps: [], assumptions: [] };
     if (depth >= maxDepth) return null;
     const key = keyOf(targets);
     if (visited.has(key)) return null;
     visited.add(key);
-    // 反查：结果朝目标有进展的规则（Δ 语义；证据强度降序）
+    // 反查：结果朝目标有进展的规则（Δ 语义；证据强度降序；执行禁忌表——本次尝试里
+    // 刚物理失败的规则不再重复选，反例的长期命运由 R2 统计决定，不在规划器里私判）
     const cands = rules
+      .filter((r) => !excluded.has(ruleKey(r)))
       .filter((r) => Object.entries(targets).some(([d, v]) => outcomeHits(r, d, frame[d], v)))
       .sort((a, b) => ruleScore(b) - ruleScore(a));
     for (const rule of cands) {
       const assumptions = [];
       const sub = {};
       for (const [d, v] of Object.entries(hardOf(rule))) if (!sat1(frame[d], v)) sub[d] = v; // hard 不满足 → 真子目标
-      for (const [d, s] of Object.entries(softOf(rule))) { // soft 不满足 → 假设（不为其规划）
-        if (!sat1(frame[d], s.v)) assumptions.push({ dim: d, cur: frame[d] ?? null, want: s.v, conf: s.conf, action: rule.action, outcome: rule.outcome ?? rule.outcomes });
+      for (const [d, s] of Object.entries(softOf(rule))) { // soft 分层：中置信(≥0.2)→子目标（疑似因果，先建立它——L3 实测 dig 缺 nearType=4 的教训）；低置信→假设
+        if (sat1(frame[d], s.v)) continue;
+        if (s.conf >= 0.2) sub[d] = s.v;
+        else assumptions.push({ dim: d, cur: frame[d] ?? null, want: s.v, conf: s.conf, action: rule.action, outcome: rule.outcome ?? rule.outcomes });
       }
       let chain = [];
       if (Object.keys(sub).length) {

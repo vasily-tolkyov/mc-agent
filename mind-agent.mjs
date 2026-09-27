@@ -183,6 +183,7 @@ const st = {
 };
 
 let body, enc, formation, registry, mem, retina, r1, r2, r3, ring, pInt, ringYawOffset, experiments = null, rngState = 20260924;
+let prevStepRec = null, prev2StepRec = null; // 前两步登记快照（滞后归因：效果跨 1-2 帧落账是物理常态）
 /** 规则引擎：'r123'（默认，R1 经验→R2 差分→R3 因素规则+反向链接）|'legacy'（样本登记 A/B 对照） */
 const ENGINE = process.env.RULES_ENGINE ?? 'r123';
 const rng = () => { rngState = (rngState * 1664525 + 1013904223) >>> 0; return rngState / 4294967296; };
@@ -191,6 +192,18 @@ const actionAffects = new Map();
 /** 地标记忆：概念被认出的位置（"原木曾出没于此"）——空间记忆是回家/回访的基础。
  * key `${dim}:${conceptIdx}` → {x, z}（该概念最近一次被认出时 bot 的位置）。 */
 const landmarks = new Map();
+/** 产出地标登记（一种资源多个产地：按类型+4m 网格位置键控；lastVisit 供回访调度避开刚挖空的点） */
+function markProduce(nearType, x, z) {
+  const key = `produce:${nearType}:${Math.round(x / 4)},${Math.round(z / 4)}`;
+  const prev = landmarks.get(key);
+  landmarks.set(key, { x, z, lastVisit: prev?.lastVisit ?? 0 });
+}
+/** 目击地标登记（看见掉落物的地方也记——"我在哪儿见过原木"包括自己丢的那堆；
+ * 带时间戳：掉落物 ~5min 消失，过期的在 spatialFields 里如实剔除） */
+function markSighting(kind, x, z) {
+  const key = `seen:${kind}:${Math.round(x / 4)},${Math.round(z / 4)}`;
+  landmarks.set(key, { x, z, ts: Date.now(), sighting: true });
+}
 
 // 概念空间（固定档，启动即建）
 const CONCEPT_SPACE = {
@@ -275,7 +288,7 @@ async function collectLesson() {
   }
   if (pickedUp()) {
     const p = body.bot.entity.position;
-    landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: p.x, z: p.z });
+    markProduce(st.lastCState?.nearType ?? 0, p.x, p.z);
     return;
   }
   // 第二步：轮询等待实体可见（只有盲捞失败才走到这里），掉落物实体跟踪有延迟
@@ -296,9 +309,9 @@ async function collectLesson() {
       await body.lookAt(nearFoot.position.x, nearFoot.position.y, nearFoot.position.z);
       await step(9); // 俯身对坑
       await step(0); // 前开跌入（记转移）
-      if (pickedUp()) { landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: body.bot.entity.position.x, z: body.bot.entity.position.z }); return; }
+      if (pickedUp()) { const q = body.bot.entity.position; markProduce(st.lastCState?.nearType ?? 0, q.x, q.z); return; }
       await step(1); // 'back' 朝视线方向（记转移）
-      if (pickedUp()) { landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: body.bot.entity.position.x, z: body.bot.entity.position.z }); return; }
+      if (pickedUp()) { const q = body.bot.entity.position; markProduce(st.lastCState?.nearType ?? 0, q.x, q.z); return; }
     }
   }
   await body.goto(it.position.x, it.position.z, 4.0); // 长途教师导航（不记转移）
@@ -308,7 +321,7 @@ async function collectLesson() {
     if (!near) break;
     await body.lookAt(near.position.x, near.position.y, near.position.z);
     await step(1);
-    if (pickedUp()) { landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: body.bot.entity.position.x, z: body.bot.entity.position.z }); return; }
+    if (pickedUp()) { const q = body.bot.entity.position; markProduce(st.lastCState?.nearType ?? 0, q.x, q.z); return; }
   }
   // 保险分两段：先停在拾取半径外（1.8m），再用记转移的逼近步穿过半径——
   // 让"吸入"发生在 step 内部，否则拾取永远藏在 goto 里、规则永远缺货（上轮根因）
@@ -319,14 +332,14 @@ async function collectLesson() {
     await body.lookAt(near.position.x, near.position.y, near.position.z);
     await step(9); // 俯身对坑
     await step(0); // 前开跌进坑：掉落物在 1 米深坑里时平走掠过坑沿垂直距 1.7 吸不到（记录步抓不到拾取的真根因）
-    if (pickedUp()) { landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: body.bot.entity.position.x, z: body.bot.entity.position.z }); return; }
+    if (pickedUp()) { const q = body.bot.entity.position; markProduce(st.lastCState?.nearType ?? 0, q.x, q.z); return; }
   }
   // 兜底（放弃规则素材，保拾取）：直接压点
   const near0 = nearestItem();
   if (near0) {
     await body.goto(near0.position.x, near0.position.z, 0.5);
     await step(0);
-    if (pickedUp()) { landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: body.bot.entity.position.x, z: body.bot.entity.position.z }); return; }
+    if (pickedUp()) { const q = body.bot.entity.position; markProduce(st.lastCState?.nearType ?? 0, q.x, q.z); return; }
   }
   // 还没捡到：再挖一块柱体并重试记录步（拾取规则入档率是 L3 命门——多轮死在它缺席）
   const stillThere = nearestItem();
@@ -339,7 +352,7 @@ async function collectLesson() {
       await body.lookAt(near.position.x, near.position.y, near.position.z);
       await step(9);
       await step(0);
-      if (pickedUp()) { landmarks.set(`produce:${st.lastCState?.nearType ?? 0}`, { x: body.bot.entity.position.x, z: body.bot.entity.position.z }); return; }
+      if (pickedUp()) { const q = body.bot.entity.position; markProduce(st.lastCState?.nearType ?? 0, q.x, q.z); return; }
     }
   }
 }
@@ -491,11 +504,13 @@ function initSpatial() {
 /** 当前航向（罗盘环读出——环是真变量，不是装饰）：环位角 + 对齐偏移 */
 function heading() { return ringYawOffset + (ring.position() / 64) * Math.PI * 2; }
 
-/** 空间维：最近地标（按积分器估计）的相对方位扇区与距离档 */
+/** 空间维：最近地标（按积分器估计）的相对方位扇区与距离档（目击地标超 240s 过期剔除——掉落物会消失） */
 function spatialFields() {
   if (!landmarks.size) return { goalBearing: 0, goalDist: 8 };
   let best = null, bestD = Infinity;
-  for (const lm of landmarks.values()) {
+  const now = Date.now();
+  for (const [k, lm] of landmarks) {
+    if (lm.sighting && now - lm.ts > 240_000) { landmarks.delete(k); continue; } // 目击地标过期剔除
     const d = Math.hypot(lm.x - pInt.x, lm.z - pInt.z);
     if (Number.isFinite(d) && d < bestD) { bestD = d; best = lm; }
   }
@@ -553,6 +568,18 @@ async function step(actIdx, { learn = true } = {}) {
       || cNext.grip !== cState.grip || cNext.logGrip !== cState.logGrip
       || (next.itemDist ?? 8) < (frame.itemDist ?? 8);
     r1.record(cState, actIdx, changed, frame, next, valence ? 3 : 1);
+    // 滞后归因（通用机制，非任务特例）：拾取延迟 0.5s、实体跟踪 1-2s，效果常跨 1-2 帧落账——
+    // 本帧新变化的维（近两步都没变的）给前两步动作各留一份衰减副本（×0.5 / ×0.25）。
+    // R2 双臂对照自会判决副本的真伪：挖原木的拾取延迟系统性落给后续动作（实测：效应臂
+    // nearType 全是草方块的巧合归因，挖原木 34 次零同帧拾取——单步窗结构性漏归因）。
+    for (const [lag, rec, w] of [[1, prevStepRec, 0.5], [2, prev2StepRec, 0.25]]) {
+      if (!rec) continue;
+      const lagOut = {};
+      for (const [d, v] of Object.entries(changed)) if (rec.changed[d] === undefined) lagOut[d] = v;
+      if (Object.keys(lagOut).length) r1.record(rec.cState, rec.actIdx, lagOut, rec.frame, next, (valence ? 3 : 1) * w);
+    }
+    prev2StepRec = prevStepRec;
+    prevStepRec = { cState, actIdx, frame, changed };
     if (valence) { formation.presentExperiment(next, 4); formation.presentExperiment(frame, 4); }
     if (ENGINE === 'legacy') mem.observe(cState, action, outcomesOf(cNext)); // A/B 对照才走样本登记
     actionObs[actIdx] = (actionObs[actIdx] ?? 0) + 1;
@@ -574,11 +601,16 @@ async function step(actIdx, { learn = true } = {}) {
   st.lastCenterState = resolveFrameCenter(next); // 中心值态（大修地基：R3/规划全走这个）
   st.lastDecision = { action: ACTION_NAMES[actIdx], from: cState, to: cNext, fromCenter: resolveFrameCenter(frame), toCenter: { ...st.lastCenterState } }; // 中心值帧：实验调度器的 Δ 复现判定用
   updateAttentionCapture(); // 掉落物突然出现 → 抢占注意力（果蝇式 onset 显著性，自适应）
+  // 目击记忆：掉落物进视野（≤8m）就记位置——"我在哪儿见过原木"包括自己丢的那批（L3 回捡的物理通路）
+  if ((next.itemDist ?? 8) < 8) {
+    const p = body.bot.entity.position;
+    markSighting(next.itemType ?? 0, p.x, p.z);
+  }
   // 地标记忆：记"产出发生地"（挖掘导致背包变化的位置 = 资源点），不是"概念被看见的地方"
   // （教训：看见村庄栅栏记成原木地标，回访挖栅栏一无所获）
   if (cNext.grip !== cState.grip || cNext.logGrip !== cState.logGrip) {
     const p = body.bot.entity.position;
-    landmarks.set(`produce:${cState.nearType}`, { x: p.x, z: p.z });
+    markProduce(cState.nearType, p.x, p.z); // 产出地标：一种资源多个产地都记（位置键控）
   }
   if (st.decisions % 100 === 0) out(`[决策] ${st.decisions}，规则 ${st.rules}，概念 ${st.concepts}，写入 ${st.writes}，地标 ${landmarks.size}`);
   return cNext;
@@ -633,23 +665,37 @@ function resolveGoalSpec(spec) {
   return goal;
 }
 
-/** 一轮目标前沿探索：地标回访（奇数轮，最近且 ≤40m）+ 40 个前沿决策（双引擎共用） */
+/** 一轮目标前沿探索：地标回访（奇数轮；产出地标挖，目击地标站上去等吸入；最久未访优先 ≤120m）+ 40 个前沿决策 */
 async function frontierRound(goalDims, round, goalTargets = null) {
   if (landmarks.size && round % 2 === 1) {
     const p = body.bot.entity.position;
-    const sorted = [...landmarks.values()].sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
+    const now = Date.now();
+    // 产出地标（produce:）+ 未过期目击地标（seen:——丢的/看见掉落物的地方）都回访；
+    // 按"最久未访 → 最近"排序（总挖同一根已空柱子 = 证据枯竭的实测根因；>40m 全跳过 = 回访失效的另一根因）
+    const sorted = [...landmarks.entries()]
+      .filter(([k, lm]) => k.startsWith('produce:') || (k.startsWith('seen:') && now - lm.ts <= 240_000))
+      .map(([k, lm]) => lm)
+      .sort((a, b) => (a.lastVisit ?? 0) - (b.lastVisit ?? 0)
+        || Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
     const lm = sorted[0];
-    if (lm && Math.hypot(lm.x - p.x, lm.z - p.z) <= 40) {
-      out(`[前沿] 回访产出地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})，在产地环视挖掘`);
-      await body.goto(lm.x, lm.z, 2.0);
-      for (let s = 0; s < 4 && (st.lastFrame?.logGrip ?? 0) === 0; s++) {
-        await body.lookAt(lm.x, -58.5, lm.z); // 柱状残余（挖剩的原木浮在空中）
-        await step(5);
-        if (!SKIP_PICKUP) await collectLesson();
-        else { await step(0); await step(0); } // L4：只有原语动作，拾取靠自己撞上
-        await step(2);
+    if (lm && Math.hypot(lm.x - p.x, lm.z - p.z) <= 120) {
+      lm.lastVisit = st.decisions;
+      if (lm.sighting) { // 目击点：掉落物在那——站上去做中性动作等吸入（不瞎挖）
+        out(`[前沿] 回访目击地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})，走近等吸入`);
+        await body.goto(lm.x, lm.z, 0.8);
+        await step(9); await step(7); await step(9); await step(7); // 俯身/换槽：中性动作，吸入在步内落账
+      } else {
+        out(`[前沿] 回访产出地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})，在产地环视挖掘`);
+        await body.goto(lm.x, lm.z, 2.0);
+        for (let s = 0; s < 4 && (st.lastFrame?.logGrip ?? 0) === 0; s++) {
+          await body.lookAt(lm.x, -58.5, lm.z); // 柱状残余（挖剩的原木浮在空中）
+          await step(5);
+          if (!SKIP_PICKUP) await collectLesson();
+          else { await step(0); await step(0); } // L4：只有原语动作，拾取靠自己撞上
+          await step(2);
+        }
       }
-    } else out('[前沿] 地标都在 40m 外，跳过回访');
+    } else if (lm) out('[前沿] 地标都在 120m 外，跳过回访');
   }
   for (let i = 0; i < 40; i++) await step(st.attentionCapture && st.decisions < st.attentionCapture.until
     ? frontierAction(['itemDist'], { itemDist: [0, 1] })  // 抢占窗内：微目标接近掉落物
@@ -725,9 +771,21 @@ async function runGoalR123(spec) {
   }
   const targets = Object.fromEntries(goalDims.map((d) => [d, goal[d]]));
   out(`目标：${JSON.stringify(targets)}（可读 ${JSON.stringify(cStateReadable(goal))}）`);
-  // 反查规划链：缺规则 → 前沿探索攒经验（R1/R2 持续 ingest），有界重试
-  let chain = null, retries = 0;
+  // 反查规划链：缺规则 → 前沿探索攒经验（R1/R2 持续 ingest）；执行断裂 → 反例入账 → 重规划
+  // （断裂不是终局：反例会让被违背规则的 ρ 在下次重建自动下降——执行即实验）
+  let chain = null, retries = 0, broke = null;
+  const failedRules = new Set(); // 执行禁忌表：本次目标尝试里刚物理失败的规则（反例的长期命运由 R2 统计决定）
+  const closeEnough = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.6;
+  const satTarget = (d, v) => (v && typeof v === 'object' && 'min' in v)
+    ? (st.lastCenterState[d] >= v.min - 1e-9 && st.lastCenterState[d] <= v.max + 1e-9)
+    : closeEnough(st.lastCenterState[d], v);
   while (retries < 10) {
+    // 目标达成短路：探索/宽限/上一节可能已经把目标维满足了——规则是手段，目标才是目的
+    if (Object.entries(targets).every(([d, v]) => satTarget(d, v))) {
+      chain = { status: 'found', steps: [], via: 'frontier' };
+      broke = null;
+      break;
+    }
     rebuildR3(); // 规划前物化最新差分
     if (retries === 0) {
       out(`[R3] 规划时状态 logGrip 中心=${st.lastCenterState?.logGrip?.toFixed?.(2)}`);
@@ -736,52 +794,76 @@ async function runGoalR123(spec) {
       const fmt = (r) => `${ACTION_NAMES[r.action]}[hard=${Object.entries(r.hard ?? r.factors).map(([d, v]) => `${d}=${typeof v === 'number' ? v.toFixed(1) : v}`).join(',')}${Object.keys(r.soft ?? {}).length ? ` soft=${Object.keys(r.soft).join(',')}` : ''}]→${JSON.stringify(r.outcomes)}(n${r.n ?? '?'} ρ${r.rho ?? '?'})`;
       out(`[R3] 物化规则 ${r3.rules.length}（logGrip 结果规则 ${lgRules.length}：${lgRules.slice(0, 3).map(fmt).join(' | ')}）：${changeRules.slice(0, 10).map(fmt).join(' | ')}${changeRules.length > 10 ? ' …' : ''}`);
     }
-    chain = planBackward({ rules: r3.rules, current: st.lastCenterState, goalDims: targets, maxDepth: 6 });
-    if (chain.status === 'found') break;
+    chain = planBackward({ rules: r3.rules, current: st.lastCenterState, goalDims: targets, maxDepth: 6, exclude: failedRules });
+    if (chain.status !== 'found') {
+      retries++;
+      st.phase = 'goal-frontier';
+      // 缺口上报（v3）：点名缺哪条证据——evidence-gap=有规则但因素不满足/证据不足；missing-rule=无规则触及目标维
+      if (chain.status === 'evidence-gap') {
+        out(`目标无规划链（证据缺口），前沿探索第 ${retries} 轮：${chain.gaps.slice(0, 3).map((g) => `${ACTION_NAMES[g.action]}→${JSON.stringify(g.outcome)} 缺 hard[${g.missing.map((m) => `${m.dim}=${m.want}`).join(',') || '无'}]`).join(' | ')}`);
+      } else {
+        out(`目标无规划链（缺失规则：无任何规则触及 ${chain.need?.join(',') ?? '目标维'}），前沿探索第 ${retries} 轮`);
+      }
+      await probeOverSpecific(goalDims, chain.gaps ?? []); // 轭式探针：固定 hard，扰动阻塞链的 soft/untested 维
+      await frontierRound(goalDims, retries, targets);
+      continue;
+    }
+    // 执行规划链：逐节 hard 因素核对 → 执行 → 结果核对（捕获+拾取延迟宽限）。
+    // 结果侧是 Δ 语义（v3）：序数/方位维核对"执行前后差值 = Δ"，类别维核对"新值命中"。
+    out(`规划链（${chain.steps.length} 节）：${chain.steps.map((r) => `${ACTION_NAMES[r.action]}→${JSON.stringify(r.outcomes)}`).join(' → ')}`);
+    if (chain.assumptions?.length) out(`[规划] 软假设 ${chain.assumptions.length} 条（执行即实验）：${chain.assumptions.slice(0, 4).map((a) => `${a.dim}=${a.want}(conf ${a.conf})`).join(' | ')}`);
+    broke = null;
+    for (const [i, rule] of chain.steps.entries()) {
+      const hard = rule.hard ?? rule.factors;
+      const missing = Object.fromEntries(Object.entries(hard).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
+      if (Object.keys(missing).length) { broke = { step: i, rule, reason: 'hard 因素不满足', missing }; break; }
+      const before = { ...st.lastCenterState };
+      await step(rule.action);
+      const check = () => {
+        const wrong = {};
+        for (const [d, v] of Object.entries(rule.outcomes)) {
+          const ok = kindOf(d) === 'cat'
+            ? closeEnough(st.lastCenterState[d], v)
+            : Number.isFinite(before[d]) && Number.isFinite(st.lastCenterState[d]) && Math.abs((st.lastCenterState[d] - before[d]) - v) <= 0.6;
+          if (!ok) wrong[d] = v;
+        }
+        return wrong;
+      };
+      let wrong = check();
+      // 拾取宽限（物理现实：挖掘后掉落物蹦出，吸入背包需 0.5–2s 且要走近到 1.5m 内）：
+      // 最多 3 拍——附近有掉落物就走近它（沿用抢占窗的拾取微目标，这本身就是该学的真规则），
+      // 没有就纯等待观察（不写 R1）；仍不符才判断裂。
+      for (let grace = 0; Object.keys(wrong).length && grace < 3; grace++) {
+        if ((st.lastFrame?.itemDist ?? 8) < 8) {
+          await step(frontierAction(['itemDist'], { itemDist: [0, 1] }));
+        } else {
+          await new Promise((r) => setTimeout(r, 800));
+          st.lastCenterState = resolveFrameCenter(perceive());
+        }
+        wrong = check();
+        if (!Object.keys(wrong).length && grace > 0) out(`[捕获] 第 ${i} 节结果延迟落定（宽限 ${grace} 拍后核对通过）`);
+      }
+      // 目标达成短路（如实性）：宽限/执行中目标维已被满足 → 不管规则结果判得多严，目标就是达到了
+      if (Object.keys(wrong).length && Object.entries(targets).every(([d, v]) => satTarget(d, v))) {
+        out(`[捕获] 第 ${i} 节规则结果与预期有出入，但目标维已满足——如实判达成（规则是手段不是目的）`);
+        wrong = {};
+      }
+      if (Object.keys(wrong).length) { broke = { step: i, rule, reason: '结果不符（捕获）', wrong }; break; }
+    }
+    if (!broke) break; // 链全程通过
     retries++;
+    const fk = `${broke.rule?.action}|${JSON.stringify(broke.rule?.outcomes ?? {})}`;
+    failedRules.add(fk); // 刚物理失败的规则本次不再选（反例入账，R2 统计管长期）
+    out(`规划链第 ${broke.step} 节断裂（${broke.reason}），禁忌 ${ACTION_NAMES[broke.rule?.action] ?? '?'}→${JSON.stringify(broke.rule?.outcomes ?? {})}——重规划第 ${retries} 轮`);
     st.phase = 'goal-frontier';
-    // 缺口上报（v3）：点名缺哪条证据——evidence-gap=有规则但因素不满足/证据不足；missing-rule=无规则触及目标维
-    if (chain.status === 'evidence-gap') {
-      out(`目标无规划链（证据缺口），前沿探索第 ${retries} 轮：${chain.gaps.slice(0, 3).map((g) => `${ACTION_NAMES[g.action]}→${JSON.stringify(g.outcome)} 缺 hard[${g.missing.map((m) => `${m.dim}=${m.want}`).join(',') || '无'}]`).join(' | ')}`);
-    } else {
-      out(`目标无规划链（缺失规则：无任何规则触及 ${chain.need?.join(',') ?? '目标维'}），前沿探索第 ${retries} 轮`);
-    }
-    await probeOverSpecific(goalDims, chain.gaps ?? []); // 轭式探针：固定 hard，扰动阻塞链的 soft/untested 维
-    await frontierRound(goalDims, retries, targets);
+    await frontierRound(goalDims, retries, targets); // 断裂后补一轮经验（新证据可能改变规则地形）
   }
-  if (chain.status !== 'found') {
-    st.goalReport = { targets, reached: false, terminationReason: chain.status, gaps: chain.gaps ?? chain.need, frontierRetries: retries, engine: 'r123' };
-    out(`目标结果：${JSON.stringify(st.goalReport)}`);
-    st.goal = null; st.phase = 'running';
-    return;
-  }
-  // 执行规划链：逐节 hard 因素核对 → 执行 → 结果核对（捕获），断裂即停（如实上报）
-  // 全部按概念中心值容差比较（语义大修：规则存含义不存编号）；结果侧是 Δ 语义（v3）：
-  // 序数/方位维核对"执行前后差值 = Δ"，类别维核对"新值命中"。
-  out(`规划链（${chain.steps.length} 节）：${chain.steps.map((r) => `${ACTION_NAMES[r.action]}→${JSON.stringify(r.outcomes)}`).join(' → ')}`);
-  if (chain.assumptions?.length) out(`[规划] 软假设 ${chain.assumptions.length} 条（执行即实验）：${chain.assumptions.slice(0, 4).map((a) => `${a.dim}=${a.want}(conf ${a.conf})`).join(' | ')}`);
-  const closeEnough = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.6;
-  const satTarget = (d, v) => (v && typeof v === 'object' && 'min' in v)
-    ? (st.lastCenterState[d] >= v.min - 1e-9 && st.lastCenterState[d] <= v.max + 1e-9)
-    : closeEnough(st.lastCenterState[d], v);
-  let broke = null;
-  for (const [i, rule] of chain.steps.entries()) {
-    const hard = rule.hard ?? rule.factors;
-    const missing = Object.fromEntries(Object.entries(hard).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
-    if (Object.keys(missing).length) { broke = { step: i, reason: 'hard 因素不满足', missing }; break; }
-    const before = { ...st.lastCenterState };
-    await step(rule.action);
-    const wrong = {};
-    for (const [d, v] of Object.entries(rule.outcomes)) {
-      const ok = kindOf(d) === 'cat'
-        ? closeEnough(st.lastCenterState[d], v)
-        : Number.isFinite(before[d]) && Number.isFinite(st.lastCenterState[d]) && Math.abs((st.lastCenterState[d] - before[d]) - v) <= 0.6;
-      if (!ok) wrong[d] = v;
-    }
-    if (Object.keys(wrong).length) { broke = { step: i, reason: '结果不符（捕获）', wrong }; break; }
-  }
-  const reached = !broke && Object.entries(targets).every(([d, v]) => satTarget(d, v));
-  st.goalReport = { targets, reached, chainLen: chain.steps.length, broke, frontierRetries: retries, engine: 'r123' };
+  const reached = !broke && chain?.status === 'found' && Object.entries(targets).every(([d, v]) => satTarget(d, v));
+  st.goalReport = {
+    targets, reached, chainLen: chain?.steps?.length ?? 0, via: chain?.via ?? (chain?.steps?.length ? 'chain' : 'none'),
+    broke, frontierRetries: retries, engine: 'r123',
+    ...(chain?.status === 'found' ? {} : { terminationReason: chain?.status, gaps: chain?.gaps ?? chain?.need }),
+  };
   out(`目标结果：${JSON.stringify(st.goalReport)}`);
   st.goal = null;
   st.phase = 'running';
