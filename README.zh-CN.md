@@ -1,4 +1,32 @@
-# Minecraft 本地展示与 Kairos 最新核心
+# mc-agent：多层模拟神经网络驱动的 Minecraft 具身智能体
+
+> **当前研究主线（2026-09-27）**：`mind-agent.mjs` + 兄弟仓库 [energy-network-sim](https://github.com/vasily-tolkyov/energy-network-sim)（二值能量网络 + 赫布学习 + 模拟退火的模拟神经网络基质）。
+> 本 README 下文主体描述的是旧 Kairos 核心入口（`npm start` → `local-agent.mjs`），保留作历史参考，**不是当前主线**；`build:core` / `test:core` 脚本引用的 `../kairos-v5-predictive-agent` 同属旧线。
+
+## 当前主线快速开始
+
+```powershell
+# 两个仓库并排克隆（mind 代码默认从同级目录 ../energy-network-sim 加载基质，也可用 ENS_PATH 环境变量指定）
+git clone https://github.com/vasily-tolkyov/energy-network-sim
+git clone https://github.com/vasily-tolkyov/mc-agent
+# 构建神经网络基质（dist/ 不入库，需要本地 tsc 构建）
+cd energy-network-sim; npm install; npm run build; cd ..
+cd mc-agent; npm install
+# 离线回归（不需要 Minecraft）
+node verify-r123.mjs        # 规则引擎 4 项：泛化 / 不误认 / 两节链 / 如实无路线
+node verify-rule-engine.mjs; node verify-ab.mjs; node verify-space.mjs
+node verify-spiking-equiv.mjs; node verify-spiking-anneal.mjs; node verify-spiking-structures.mjs
+# 在线验收（需要 Java 17+；1.20.4 超平坦训练场服务端在仓库内）
+npm run server:start
+node mind-agent.mjs --levels   # L1 教师课程 → L2 自主验证 → L3 目标规划（→ L4，LEVEL4=1）
+npm run proxy:start            # 可选：ViaProxy 127.0.0.1:25568 供客户端旁观
+```
+
+架构说明见 `docs/`；最新实测状态与遗留开放问题见仓库根提交日志与 `runs/` 验收日志（`runs/` 不入库，复现请自行重跑）。
+
+---
+
+# （旧线存档）Minecraft 本地展示与 Kairos 最新核心
 
 `npm start` 现在直接运行 GitHub Kairos 的最新经验学习核心，机器人和本地 Minecraft 客户端进入同一个真实世界。默认不启动浏览器 viewer，不调用 Typesafe/Jev 云 API。
 
