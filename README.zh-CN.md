@@ -22,6 +22,15 @@ node mind-agent.mjs --levels   # L1 教师课程 → L2 自主验证 → L3 目�
 npm run proxy:start            # 可选：ViaProxy 127.0.0.1:25568 供客户端旁观
 ```
 
+## 两种网络基质的关系（重要，别混淆）
+
+本工程有两种可切换的网络基质，**算法是同一套**（能量语义 E(s)=θΣs−ΣW+ΣΓ、赫布学习、Metropolis 退火求能耗极小），区别只在信号载体：
+
+- **二值 EnergyNetwork**（默认）：局部场瞬时求和，异步 Glauber 动力学。
+- **脉冲 SpikingEnergyNetwork**（`mind/spiking-network.mjs`，Tier-2 研究线）：局部场改为带符号脉冲事件传递 + 泄漏积分，决策语义与二值版**逐位等价**——不是口头宣称，`node verify-spiking-equiv.mjs` 逐点断言 |差|<1e-9，`verify-spiking-anneal.mjs` 同种子逐位复现退火轨迹。脉冲层同时是放电光栅等神经科学分析的观察窗。
+
+切换方式：`NET_SUBSTRATE=spiking node mind-agent.mjs --levels`（缺省 `binary`）。**注意：换脉冲载体不是"去掉退火"**——退火仍是从能耗极小原理导出激活模式的核心机制，脉冲只是它的物理承载。当前 L1–L4 验收数据均为二值基质跑出。
+
 架构说明见 `docs/`；最新实测状态与遗留开放问题见仓库根提交日志与 `runs/` 验收日志（`runs/` 不入库，复现请自行重跑）。
 
 ---
