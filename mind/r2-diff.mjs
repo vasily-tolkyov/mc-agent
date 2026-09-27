@@ -5,12 +5,18 @@
  * 背景（从因素集剔除）。规则从严格开始（全维恒定）、随反例泛化（维逐个豁免）——
  * 这是控制变量实验的在线连续版：不需要预先设计实验，共变/不共变本身就是证据。
  *
- * 冲突：同动作、因素集被满足、但结果不同的组 → 各自成规则，按支持票数竞争
- * （单次异常不改判：挑战者票数须 ≥ min(在位者, quorum)，与 OutcomeEvidence 同一原则）。
+ * 语义地基（大修后）：情节的条件/结果全部是**概念中心值**（含义），不是索引号——
+ * 索引会随概念形成顺序漂移，中心值是物理意义本身（实测根因：同一"掉落物在旁"
+ * 拿过 5 号和 9 号，按编号匹配链就断）。分簇/恒定判定用 0.5 网格容差
+ * （= 编码分辨率级），不再用严格相等。
  *
- * 输出规则形态：{ action, factors: {dim: conceptIdx}, outcomes: {dim: conceptIdx},
+ * 输出规则形态：{ action, factors: {dim: 中心值}, outcomes: {dim: 中心值},
  * support, lastTick }。factors 是 R2B 当前相信的相关子集（只会随证据缩小）。
  */
+
+const Q = 0.5; // 中心值量化网格（编码分辨率级）
+const qv = (v) => Math.round(v / Q) * Q; // 网格化
+const sameVal = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= Q;
 
 /** 分组键：动作 + 变化的结果维集合（模式，不含具体值——值在组内分析） */
 const groupKey = (ep) => `${ep.act}|${Object.keys(ep.outcomes).sort().join(',')}`;
@@ -18,18 +24,11 @@ const groupKey = (ep) => `${ep.act}|${Object.keys(ep.outcomes).sort().join(',')}
 export class DifferentialExtractor {
   constructor({ quorum = 3 } = {}) {
     this.quorum = quorum;
-    /** groupKey → { action, outcomeDims: [], episodes: [], factorSets: Map<sig, rule> } */
+    /** groupKey → { action, outcomeDims: [], episodes: [] } */
     this.groups = new Map();
-    /** 全部规则（按 (action, 结果签名, 因素签名) 索引） */
+    /** 全部规则（按 (动作, 结果签名, 因素签名) 索引） */
     this.rules = new Map();
     this.processed = 0; // 已差分到的情节 tick（增量差分）
-  }
-
-  /** 规则签名：动作+结果维值+因素维值 */
-  static ruleSig(rule) {
-    const f = Object.keys(rule.factors).sort().map((d) => `${d}=${rule.factors[d]}`).join(',');
-    const o = Object.keys(rule.outcomes).sort().map((d) => `${d}=${rule.outcomes[d]}`).join(',');
-    return `${rule.action}|${o}|${f}`;
   }
 
   /** 全量重差分前复位（回填路径：R1 裸值经当前概念透镜重新解析后从头 ingest） */
@@ -37,6 +36,13 @@ export class DifferentialExtractor {
     this.groups.clear();
     this.rules.clear();
     this.processed = 0;
+  }
+
+  /** 规则签名：动作+结果维值+因素维值（中心值 0.5 网格化） */
+  static ruleSig(rule) {
+    const f = Object.keys(rule.factors).sort().map((d) => `${d}=${qv(rule.factors[d])}`).join(',');
+    const o = Object.keys(rule.outcomes).sort().map((d) => `${d}=${qv(rule.outcomes[d])}`).join(',');
+    return `${rule.action}|${o}|${f}`;
   }
 
   /** 增量喂入新情节（R1 每次记录后调用） */
@@ -54,38 +60,36 @@ export class DifferentialExtractor {
     for (const ep of episodes) if (ep.tick > this.processed) this.ingest(ep);
   }
 
-  /** 组内差分：同结果维值聚类 → 每簇提取因素集 */
+  /** 组内差分：同结果维值（0.5 网格容差）聚类 → 每簇提取因素集 */
   diffGroup(g) {
     // 先按结果维的具体值再分簇（同动作同变化模式但结果值不同 = 不同规则）
-    const clusters = new Map(); // outcomeSig → eps
+    const clusters = new Map(); // outcomeSig(网格化) → eps
     for (const ep of g.episodes) {
-      const osig = g.outcomeDims.map((d) => `${d}=${ep.outcomes[d]}`).join(',');
+      const osig = g.outcomeDims.map((d) => `${d}=${qv(ep.outcomes[d])}`).join(',');
       const arr = clusters.get(osig) ?? [];
       arr.push(ep);
       clusters.set(osig, arr);
     }
     for (const [osig, eps] of clusters) {
-      const outcomes = Object.fromEntries(g.outcomeDims.map((d, i) => [d, eps[0].outcomes[d]]));
-      // 候选因素：簇内恒定维（所有情节该维同值）；随反例自动缩小
+      const outcomes = Object.fromEntries(g.outcomeDims.map((d) => [d, qv(eps[0].outcomes[d])]));
+      // 候选因素：簇内恒定维（中心值容差下同值）；随反例自动缩小
       const dims = Object.keys(eps[0].conditions).filter((d) => d !== 'act');
       const factors = {};
       for (const d of dims) {
         const v = eps[0].conditions[d];
-        if (eps.every((e) => e.conditions[d] === v)) factors[d] = v;
+        if (eps.every((e) => sameVal(e.conditions[d], v))) factors[d] = qv(v);
       }
-      const rule = { action: g.action, factors, outcomes, support: eps.length, lastTick: eps.at(-1).tick };
+      const rule = { action: g.action, factors, outcomes, support: eps.reduce((s, e) => s + (e.weight ?? 1), 0), lastTick: eps.at(-1).tick }; // 支持度 = Σ效价权重（果蝇多巴胺记账：重要事件单次顶多次）
       const sig = DifferentialExtractor.ruleSig(rule);
-      // 因素集随反例缩小时签名漂移：同动作同结果、因素集 ⊋ 新规则的陈旧严格版被泛化版取代（删除防双核竞争）
+      // 因素集随反例缩小时签名漂移：同动作同结果、因素集 ⊋ 新规则的陈旧严格版被泛化版取代
       for (const [k, old] of this.rules) {
         if (k === sig || old.action !== rule.action) continue;
         const sameOutcome = JSON.stringify(old.outcomes) === JSON.stringify(rule.outcomes);
         if (!sameOutcome) continue;
-        const oldIsSuperset = Object.keys(old.factors).every((d) => rule.factors[d] === old.factors[d]);
+        const oldIsSuperset = Object.keys(old.factors).every((d) => rule.factors[d] !== undefined && sameVal(rule.factors[d], old.factors[d]));
         if (oldIsSuperset && Object.keys(old.factors).length > Object.keys(rule.factors).length) this.rules.delete(k);
       }
       this.rules.set(sig, rule);
-      // 老簇的新情节若在某因素维上出现新值：该维不再是因素（恒定检查对全集恒失败，
-      // 下一轮 diffGroup 全量重算时自然缩小）——无需显式操作。
     }
   }
 

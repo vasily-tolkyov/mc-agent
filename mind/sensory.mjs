@@ -30,9 +30,11 @@ export const SENSORY_DIMS = [
   CONT('speed', 0, 0.5),           // 水平速度模
   DISC('onGround', 2),             // 是否着地
   DISC('viewWell', 14),            // 视网膜认出的视觉井稳定槽位（0-12），13=未识别（由 mind-agent 的视网膜流填写）
-  DISC('itemDist', 9),             // 最近掉落物实体距离（0-8 截顶取整，无掉落物=8）
+  DISC('itemDist', 9),             // 最近掉落物实体距离（0-8 截顶，无掉落物=8）
   DISC('itemType', 13),            // 最近掉落物类型（复用方块字母表，非方块物品归 12，无掉落物=0）
   DISC('itemBearing', 9),          // 掉落物相对视线方位：扇区 -4..4 → 0..8（正前=4，无掉落物=0）
+  DISC('goalBearing', 9),          // 目标地标相对方位扇区（罗盘环读出：-4..4 → 0..8，正前=4，无目标=0）
+  DISC('goalDist', 9),             // 目标地标距离档（0-8 截顶取整，无目标=8）
 ];
 export const DIM_NAMES = SENSORY_DIMS.map((d) => d.name);
 
@@ -87,5 +89,6 @@ export function sensoryFrame(bot) {
     onGround: bot.entity.onGround ? 1 : 0,
     viewWell: 13, // 默认未识别；mind-agent 的视网膜流每帧覆写
     itemDist, itemType, itemBearing,
+    goalBearing: 0, goalDist: 8, // 默认无目标；mind-agent 的空间层每帧覆写
   };
 }

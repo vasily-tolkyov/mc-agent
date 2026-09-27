@@ -22,6 +22,11 @@ const POOL_SIZE = 2;
 const POOL_GAMMA = 20;
 const outName = (d) => 'next' + d[0].toUpperCase() + d.slice(1); // 结果维独立命名空间（条件/结果同名字段会跨维接力，FieldRuleMemory 幻影块教训）
 
+/** 基质注入点：默认二值 EnergyNetwork；NET_SUBSTRATE=spiking 时换 SpikingEnergyNetwork
+ * （脉冲载体与二值语义逐位等价——对拍测试在 verify-spiking-equiv/anneal.mjs） */
+let netClassOverride = null;
+export function setR3NetClass(cls) { netClassOverride = cls; }
+
 export class FactorRuleNet {
   /**
    * @param conceptCaps 每维概念容量（bins = cap+1 含未知档）
@@ -48,7 +53,7 @@ export class FactorRuleNet {
     this.rules = rules.map((r) => ({ ...r }));
     const coreBase = this.enc.neuronCount;
     const n = coreBase + Math.max(1, rules.length) * CORE_SIZE + POOL_SIZE;
-    this.net = new EnergyNetwork({ neuronCount: n, activationEnergy: 1.0, maintenanceEnergy: 0.5, learningRate: 0.1, maxWeight: 3.0 });
+    this.net = new (netClassOverride ?? EnergyNetwork)({ neuronCount: n, activationEnergy: 1.0, maintenanceEnergy: 0.5, learningRate: 0.1, maxWeight: 3.0 });
     const poolBase = n - POOL_SIZE;
     this.poolBase = poolBase;
     this.rules.forEach((rule, i) => { // 注意：核要挂在副本上（挂原数组上 predict 读不到——实测 bug）
@@ -127,5 +132,17 @@ export class FactorRuleNet {
     }
     if (!winner || bestOn < 3) return { kind: 'ambiguous', rule: null, outcomes: null, energy: result.energy, converged: result.converged, approximate };
     return { kind: 'usable', rule: winner, outcomes: { ...winner.outcomes }, energy: result.energy, converged: result.converged, terminationReason: result.terminationReason, approximate };
+  }
+
+  /** 轻量匹配（不退火）：规则因素在当前查询中的满足率，供探索打分用——
+   * 语义如实标注为近似（不经过退火竞争，只做因素覆盖统计），用于"哪个动作有戏"的
+   * 自适应偏好打分：偏好随规则库更新自动更新，不是手工写死。
+   * 中心值语义：因素与查询按中心值容差（0.6）匹配，不按索引号。 */
+  matchRules(query, action) {
+    return this.rules.filter((r) => r.action === action).map((r) => {
+      const dims = Object.keys(r.factors);
+      const sat = dims.filter((d) => Number.isFinite(query[d]) && Math.abs(query[d] - r.factors[d]) <= 0.6).length;
+      return { rule: r, ratio: dims.length === 0 ? 1 : sat / dims.length, support: r.support };
+    }).filter((x) => x.ratio >= 0.75).sort((a, b) => b.ratio - a.ratio || b.rule.support - a.rule.support);
   }
 }

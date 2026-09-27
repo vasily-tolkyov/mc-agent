@@ -14,12 +14,15 @@ export class EpisodeBuffer {
 
   /** 登记一条经验。conditions/outcomes 是概念索引帧（outcomes 只放变化维）；
    * rawConditions/rawNext = 裸值帧（回填用：概念是后置形成的，旧情节的概念索引当时
-   * 都是未知档——留裸值才能用"今天的透镜"重读历史，R2/R3 周期性全量重差分）。 */
-  record(conditions, act, outcomes, rawConditions = null, rawNext = null) {
+   * 都是未知档——留裸值才能用"今天的透镜"重读历史，R2/R3 周期性全量重差分）。
+   * weight = 效价权重（果蝇多巴胺广播的记账版：重要事件单次顶多次——
+   * 抢占事件/背包变化 = 高，其余 = 1）。 */
+  record(conditions, act, outcomes, rawConditions = null, rawNext = null, weight = 1) {
     const ep = {
       conditions: { ...conditions }, act, outcomes: { ...outcomes }, tick: ++this.tick,
       rawConditions: rawConditions ? { ...rawConditions } : null,
       rawNext: rawNext ? { ...rawNext } : null,
+      weight,
     };
     this.episodes.push(ep);
     if (this.episodes.length > this.capacity) this.episodes.splice(0, this.episodes.length - this.capacity);
