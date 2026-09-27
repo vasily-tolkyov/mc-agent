@@ -30,7 +30,7 @@ import { createBody, ACTION_NAMES } from './mind/body.mjs';
 import { sensoryFrame, SENSORY_DIMS, DIM_NAMES, BLOCK_IDS, raycastForward } from './mind/sensory.mjs';
 import { RetinaStream, retinaGrid } from './mind/retina.mjs';
 import { EpisodeBuffer } from './mind/r1-episodes.mjs';
-import { DifferentialExtractor } from './mind/r2-diff.mjs';
+import { DifferentialExtractor, kindOf } from './mind/r2-diff.mjs';
 import { FactorRuleNet, setR3NetClass } from './mind/r3-rules.mjs';
 import { planBackward } from './mind/plan-back.mjs';
 import { ExperimentScheduler } from './mind/experiments.mjs';
@@ -110,7 +110,8 @@ function rebuildR3() {
     for (const d of DIM_NAMES) {
       cond[d] = centerOf(d, ep.rawConditions[d]);
       const nextRaw = ep.rawNext?.[d] ?? ep.rawConditions[d];
-      if (nextRaw !== ep.rawConditions[d]) chg[d] = centerOf(d, nextRaw); // 变化判定按裸值相等（索引漂移不再断链）
+      // 变化判定按概念级（中心值差 > Q 网格）：裸值浮点抖动不算变化（speed/nearDist 伪结果教训）
+      if (Math.abs(centerOf(d, nextRaw) - cond[d]) > 0.5) chg[d] = centerOf(d, nextRaw);
     }
     r2.ingest({ conditions: cond, act: ep.act, outcomes: chg, tick: ep.tick });
   }
@@ -429,7 +430,12 @@ function frontierAction(goalDims, goalTargets = null) {
         for (const d of goalDims) {
           if (out[d] === undefined) continue;
           const t = goalTargets?.[d];
-          if (t !== undefined && (Array.isArray(t) ? t.includes(out[d]) : out[d] === t)) score += 3;
+          // 区间目标（{min,max}，resolveGoalSpec 区间语义）按包含判断；数组/单值兼容
+          const hit = t !== undefined
+            && (Array.isArray(t) ? t.includes(out[d])
+              : typeof t === 'object' ? out[d] >= t.min && out[d] <= t.max
+                : out[d] === t);
+          if (hit) score += 3;
           else score += 0.5;
         }
         for (const d of Object.keys(out)) {
@@ -566,7 +572,7 @@ async function step(actIdx, { learn = true } = {}) {
   }
   st.lastCState = cNext;
   st.lastCenterState = resolveFrameCenter(next); // 中心值态（大修地基：R3/规划全走这个）
-  st.lastDecision = { action: ACTION_NAMES[actIdx], from: cState, to: cNext };
+  st.lastDecision = { action: ACTION_NAMES[actIdx], from: cState, to: cNext, fromCenter: resolveFrameCenter(frame), toCenter: { ...st.lastCenterState } }; // 中心值帧：实验调度器的 Δ 复现判定用
   updateAttentionCapture(); // 掉落物突然出现 → 抢占注意力（果蝇式 onset 显著性，自适应）
   // 地标记忆：记"产出发生地"（挖掘导致背包变化的位置 = 资源点），不是"概念被看见的地方"
   // （教训：看见村庄栅栏记成原木地标，回访挖栅栏一无所获）
@@ -650,26 +656,44 @@ async function frontierRound(goalDims, round, goalTargets = null) {
     : frontierAction(goalDims, goalTargets));
 }
 
-/** 缺口→控制变量实验（通用机制，不是拾取特例）：
- * 规划链缺口 = 结果命中目标维但因素集过宽的规则（小簇规则把整帧都当因素）。
- * 对每个这样的规则，在 4 个变体情境下重放它的动作（转向/前进各变一个情境维，
- * 动作不变）——R2B 拿到反例后：该维变化而结果不变 → 该维非影响因素 → 从因素集剔除。
- * 这就是"主动做控制变量实验补全规则"：不是走过去捡东西（任务特例），
- * 而是对任何缺口的规则补证据（通用机制）。 */
-async function probeOverSpecific(goalDims, maxRules = 3) {
-  const gaps = r3.rules
-    .filter((r) => goalDims.some((g) => r.outcomes[g] !== undefined) && Object.keys(r.factors).length >= 3)
-    .sort((a, b) => b.support - a.support)
-    .slice(0, maxRules);
-  for (const rule of gaps) {
-    const before = Object.keys(rule.factors).length;
-    out(`[实验] 规则 ${ACTION_NAMES[rule.action]}→${JSON.stringify(rule.outcomes)}（${before} 因素）做控制变量探针：4 变体情境重放`);
-    for (const ctx of [2, 3, 0, 1]) { // 左/右/前/后 各变一个情境维
-      await step(ctx);
-      await step(rule.action);
-    }
+/** 缺口→轭式控制变量探针（v3 通用机制，Q5 答复落地）：
+ * 规划器点名的缺口（evidence-gap）= 有规则触及目标维但 hard 因素不满足/证据不足。
+ * 轭式设计：只在 hard 因素当前已满足时探（固定因果维），只扰动一个 soft/untested 维，
+ * 动作不变。该维变化而结果复现 → R2 双臂对照自动把它降出 hard；不复现 → conf 上升。
+ * （v2 探针教训：固定 4 变体扰动的是因果维 nearType——效应消失，信息量结构性为零。） */
+async function probeOverSpecific(goalDims, gaps = [], maxProbes = 3) {
+  if (!experiments) return 0;
+  const gapKeys = new Set(gaps.map((g) => `${g.action}|${JSON.stringify(g.outcome)}`));
+  const cands = r3.rules
+    .filter((r) => goalDims.some((g) => r.outcomes[g] !== undefined))
+    .filter((r) => Object.keys(r.soft ?? {}).length || Object.keys(r.untested ?? {}).length)
+    .sort((a, b) => {
+      const ga = gapKeys.has(`${a.action}|${JSON.stringify(a.outcome ?? a.outcomes)}`) ? 1 : 0;
+      const gb = gapKeys.has(`${b.action}|${JSON.stringify(b.outcome ?? b.outcomes)}`) ? 1 : 0;
+      return gb - ga || (b.rho ?? 0.5) * Math.log2(2 + (b.n ?? 1)) - (a.rho ?? 0.5) * Math.log2(2 + (a.n ?? 1));
+    });
+  let done = 0;
+  for (const rule of cands) {
+    if (done >= maxProbes) break;
+    // 轭式前提：hard 因素当前全部满足（不满足 = 情境不对，硬探会污染对照臂）
+    const hardOk = Object.entries(rule.hard ?? {}).every(([d, v]) =>
+      Number.isFinite(st.lastCenterState?.[d]) && Math.abs(st.lastCenterState[d] - v) <= 0.6);
+    if (!hardOk) continue;
+    // 扰动目标（VOI）：untested（conf=0）优先，soft 按 conf 升序——越不确定越值
+    const pool = [
+      ...Object.entries(rule.untested ?? {}).map(([d, v]) => ({ d, v, conf: 0 })),
+      ...Object.entries(rule.soft ?? {}).map(([d, s]) => ({ d, v: s.v, conf: s.conf })),
+    ].sort((a, b) => a.conf - b.conf);
+    const target = pool[0];
+    if (!target || target.v === undefined) continue;
+    out(`[实验] 轭式探针：${ACTION_NAMES[rule.action]}→${JSON.stringify(rule.outcomes)}（hard=${JSON.stringify(rule.hard)}），扰动 ${target.d}（基准 ${target.v}，conf ${target.conf}）`);
+    const prep = await experiments.prepare(target.d, target.v).catch((e) => ({ feasible: false, note: e.message }));
+    if (!prep.feasible || !prep.ok) continue;
+    await step(rule.action); // 变体情境下重放动作——情节照常喂 R1，判决靠下次 rebuildR3 的双臂对照
+    if (prep.cleanup) try { prep.cleanup(); } catch { /* 刹车失败无碍，下一帧感知如实反映 */ }
+    done++;
   }
-  return gaps.length;
+  return done;
 }
 
 /** r123 目标模式：反向链接规划（R3 因素规则）→ 逐节执行核对（捕获）→ 缺规则前沿探索 */
@@ -709,35 +733,51 @@ async function runGoalR123(spec) {
       out(`[R3] 规划时状态 logGrip 中心=${st.lastCenterState?.logGrip?.toFixed?.(2)}`);
       const changeRules = r3.rules.filter((r) => Object.keys(r.outcomes).length > 0);
       const lgRules = changeRules.filter((r) => r.outcomes.logGrip !== undefined);
-      out(`[R3] 物化规则 ${r3.rules.length}（变化规则 ${changeRules.length}，logGrip 结果规则 ${lgRules.length}：${lgRules.slice(0, 3).map((r) => `${ACTION_NAMES[r.action]}→${JSON.stringify(r.outcomes)}`).join(' | ')}）：${changeRules.slice(0, 10).map((r) => `${ACTION_NAMES[r.action]}[${Object.entries(r.factors).map(([d, v]) => `${d}=${typeof v === 'number' ? v.toFixed(1) : v}`).join(',')}]→${JSON.stringify(r.outcomes)}(s${r.support})`).join(' | ')}${changeRules.length > 10 ? ' …' : ''}`);
+      const fmt = (r) => `${ACTION_NAMES[r.action]}[hard=${Object.entries(r.hard ?? r.factors).map(([d, v]) => `${d}=${typeof v === 'number' ? v.toFixed(1) : v}`).join(',')}${Object.keys(r.soft ?? {}).length ? ` soft=${Object.keys(r.soft).join(',')}` : ''}]→${JSON.stringify(r.outcomes)}(n${r.n ?? '?'} ρ${r.rho ?? '?'})`;
+      out(`[R3] 物化规则 ${r3.rules.length}（logGrip 结果规则 ${lgRules.length}：${lgRules.slice(0, 3).map(fmt).join(' | ')}）：${changeRules.slice(0, 10).map(fmt).join(' | ')}${changeRules.length > 10 ? ' …' : ''}`);
     }
     chain = planBackward({ rules: r3.rules, current: st.lastCenterState, goalDims: targets, maxDepth: 6 });
     if (chain.status === 'found') break;
     retries++;
     st.phase = 'goal-frontier';
-    out(`目标无规划链（R3 缺规则），前沿探索第 ${retries} 轮`);
-    await probeOverSpecific(goalDims); // 先对"结果命中目标维但因素过宽"的规则做控制变量探针，剔薄因素集
+    // 缺口上报（v3）：点名缺哪条证据——evidence-gap=有规则但因素不满足/证据不足；missing-rule=无规则触及目标维
+    if (chain.status === 'evidence-gap') {
+      out(`目标无规划链（证据缺口），前沿探索第 ${retries} 轮：${chain.gaps.slice(0, 3).map((g) => `${ACTION_NAMES[g.action]}→${JSON.stringify(g.outcome)} 缺 hard[${g.missing.map((m) => `${m.dim}=${m.want}`).join(',') || '无'}]`).join(' | ')}`);
+    } else {
+      out(`目标无规划链（缺失规则：无任何规则触及 ${chain.need?.join(',') ?? '目标维'}），前沿探索第 ${retries} 轮`);
+    }
+    await probeOverSpecific(goalDims, chain.gaps ?? []); // 轭式探针：固定 hard，扰动阻塞链的 soft/untested 维
     await frontierRound(goalDims, retries, targets);
   }
   if (chain.status !== 'found') {
-    st.goalReport = { targets, reached: false, terminationReason: 'no-known-route', frontierRetries: retries, engine: 'r123' };
+    st.goalReport = { targets, reached: false, terminationReason: chain.status, gaps: chain.gaps ?? chain.need, frontierRetries: retries, engine: 'r123' };
     out(`目标结果：${JSON.stringify(st.goalReport)}`);
     st.goal = null; st.phase = 'running';
     return;
   }
-  // 执行规划链：逐节因素核对 → 执行 → 结果核对（捕获），断裂即停（如实上报）
-  // 全部按概念中心值容差比较（语义大修：规则存含义不存编号）
+  // 执行规划链：逐节 hard 因素核对 → 执行 → 结果核对（捕获），断裂即停（如实上报）
+  // 全部按概念中心值容差比较（语义大修：规则存含义不存编号）；结果侧是 Δ 语义（v3）：
+  // 序数/方位维核对"执行前后差值 = Δ"，类别维核对"新值命中"。
   out(`规划链（${chain.steps.length} 节）：${chain.steps.map((r) => `${ACTION_NAMES[r.action]}→${JSON.stringify(r.outcomes)}`).join(' → ')}`);
+  if (chain.assumptions?.length) out(`[规划] 软假设 ${chain.assumptions.length} 条（执行即实验）：${chain.assumptions.slice(0, 4).map((a) => `${a.dim}=${a.want}(conf ${a.conf})`).join(' | ')}`);
   const closeEnough = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.6;
   const satTarget = (d, v) => (v && typeof v === 'object' && 'min' in v)
     ? (st.lastCenterState[d] >= v.min - 1e-9 && st.lastCenterState[d] <= v.max + 1e-9)
     : closeEnough(st.lastCenterState[d], v);
   let broke = null;
   for (const [i, rule] of chain.steps.entries()) {
-    const missing = Object.fromEntries(Object.entries(rule.factors).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
-    if (Object.keys(missing).length) { broke = { step: i, reason: '因素不满足', missing }; break; }
+    const hard = rule.hard ?? rule.factors;
+    const missing = Object.fromEntries(Object.entries(hard).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
+    if (Object.keys(missing).length) { broke = { step: i, reason: 'hard 因素不满足', missing }; break; }
+    const before = { ...st.lastCenterState };
     await step(rule.action);
-    const wrong = Object.fromEntries(Object.entries(rule.outcomes).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
+    const wrong = {};
+    for (const [d, v] of Object.entries(rule.outcomes)) {
+      const ok = kindOf(d) === 'cat'
+        ? closeEnough(st.lastCenterState[d], v)
+        : Number.isFinite(before[d]) && Number.isFinite(st.lastCenterState[d]) && Math.abs((st.lastCenterState[d] - before[d]) - v) <= 0.6;
+      if (!ok) wrong[d] = v;
+    }
     if (Object.keys(wrong).length) { broke = { step: i, reason: '结果不符（捕获）', wrong }; break; }
   }
   const reached = !broke && Object.entries(targets).every(([d, v]) => satTarget(d, v));
@@ -969,6 +1009,14 @@ async function main() {
   r1 = new EpisodeBuffer({ capacity: 4000, persistPath: EPISODES });
   r2 = new DifferentialExtractor({ quorum: 3 });
   r3 = new FactorRuleNet(CONCEPT_CAPS, ACTION_NAMES.length);
+  // 主动控制变量实验调度器：空转分支 + 目标缺口探针共用（--levels 也需要它做轭式探针，
+  // 必须在 levels 分支 return 之前实例化——此前探针在验收跑里根本不存在，复审实证）
+  experiments = new ExperimentScheduler({
+    getBody: () => body, st, r1, r3, registry, caps: CONCEPT_CAPS,
+    step: (i) => step(i), probe: () => resolveFrame(perceive()),
+    rng, out, ACTION_NAMES, DIM_NAMES,
+    ledgerPath: path.join(RUNS, 'experiments.jsonl'),
+  });
 
   if (process.argv.includes('--levels')) { // 四级验收模式：重建场地、全新身份、跑协议、退出
     execFileSync(process.execPath, [path.join(ROOT, 'build-flat-map.cjs')], { stdio: 'inherit' });
@@ -982,13 +1030,6 @@ async function main() {
 
   await connect();
   initSpatial(); // 空间层：罗盘环点燃 + 路径积分归零 + 环位对齐初始 yaw
-  // 主动控制变量实验调度器：空转分支里对"从未变化的存疑因素维"做干预实验（判决靠 R2B 重差分）
-  experiments = new ExperimentScheduler({
-    getBody: () => body, st, r1, r3, registry, caps: CONCEPT_CAPS,
-    step: (i) => step(i), probe: () => resolveFrame(perceive()),
-    rng, out, ACTION_NAMES, DIM_NAMES,
-    ledgerPath: path.join(RUNS, 'experiments.jsonl'),
-  });
   st.phase = 'running';
   out(`[系统] 连续流启动：概念空间 ${CONCEPT_SPACE.states.map((d) => `${d.name}=${d.bins}档`).join(' ')}`);
   for (;;) {

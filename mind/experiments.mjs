@@ -14,7 +14,7 @@
  *   技术存疑 = 封顶 6 次仍采不到变体/无法判决（瞬态维采不到不硬撑）。
  */
 import fs from 'node:fs';
-import { DifferentialExtractor } from './r2-diff.mjs';
+import { DifferentialExtractor, classifyChange } from './r2-diff.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -58,21 +58,23 @@ export class ExperimentScheduler {
     await this.runExperiment(cand);
   }
 
-  /** 选疑点：R3 规则的因素维里，"R1 全历史（裸值→当前概念透镜）有效取值数==1"的维。
-   * 从未变化 = 未被证伪就当因素 = 存疑。排序：规则 support × 1/(1+该对实验已试次数)，取第一。 */
+  /** 选疑点（v3 三态适配）：R3 规则的 untested 维（该动作下全历史未变，conf=0 最优先）
+   * ∪ soft 维（证据不足的因素候选，conf 越低越优先）。
+   * 排序：规则证据强度 ρ·log(n) × 优先级 / (1+已试次数)，取第一。 */
   pickSuspect() {
     const { r3, caps } = this.ctx;
-    const distinct = this.distinctByDim();
     let best = null;
     for (const rule of r3.rules) {
-      for (const [dim, v] of Object.entries(rule.factors)) {
-        if (v === caps[dim]) continue;          // 恒未知档：概念没成形，先不做实验
-        const vals = distinct.get(dim);
-        if (!vals || vals.size !== 1) continue; // 历史里变过 → 差分可判决，不是疑点
+      const suspects = [
+        ...Object.entries(rule.untested ?? {}).map(([dim, v]) => ({ dim, v, prio: 2 })),
+        ...Object.entries(rule.soft ?? {}).map(([dim, s]) => ({ dim, v: s.v, prio: 1 - s.conf })),
+      ];
+      for (const { dim, v, prio } of suspects) {
+        if (v === undefined || v === caps[dim]) continue; // 恒未知档：概念没成形，先不做实验
         const key = pairKey(rule, dim);
         const pair = this.pairs.get(key);
         if (pair && pair.verdict !== '进行中') continue;
-        const score = rule.support / (1 + (pair?.tries ?? 0));
+        const score = (rule.rho ?? 0.5) * Math.log2(2 + (rule.n ?? 1)) * prio / (1 + (pair?.tries ?? 0));
         if (!best || score > best.score) best = { rule, dim, v, key, score };
       }
     }
@@ -96,7 +98,7 @@ export class ExperimentScheduler {
   }
 
   /** 收割判决（不重差分，只读 R3 现状——判决本身是 rebuildR3 里 R2B 自动做出的）：
-   * 排除 = 变体下结果复现过，且 R3 同簇规则（同动作同结果）因素集已不含该维；
+   * 排除 = 变体下结果复现过，且 R3 同簇规则（同动作同结果）的 hard 因素集已不含该维；
    * 确认 = 变体下结果连续未复现 ≥ CONFIRM_FAILS；
    * 规则消亡（结果签名再也匹配不上）且无复现证据 → 技术存疑；到封顶次数 → 技术存疑。 */
   refreshVerdicts() {
@@ -105,8 +107,8 @@ export class ExperimentScheduler {
       if (p.verdict !== '进行中') continue;
       if (p.consecFail >= CONFIRM_FAILS) { this.settle(p, '确认', `变体下结果连续 ${p.consecFail} 次未复现`); continue; }
       const alive = r3.rules.filter((r) => r.action === p.action && outcomeSig(r) === p.outcomeSig);
-      if (p.repro >= 1 && (alive.length === 0 || alive.every((r) => !(p.dim in r.factors)))) {
-        this.settle(p, '排除', `变体下结果复现 ${p.repro} 次，重建后该维已不在因素集`);
+      if (p.repro >= 1 && (alive.length === 0 || alive.every((r) => !(p.dim in (r.hard ?? r.factors))))) {
+        this.settle(p, '排除', `变体下结果复现 ${p.repro} 次，重建后该维已不在 hard 因素集`);
         continue;
       }
       if (alive.length === 0 && p.repro === 0) { this.settle(p, '技术存疑', '规则在重建中消亡（结果签名漂移），无法判决'); continue; }
@@ -156,7 +158,12 @@ export class ExperimentScheduler {
         out(`[实验] 第 ${p.tries} 次：${dim} 仍未采到有效变体（条件帧值=${ld.from[dim]}，瞬态错过/未知档都算未采到）`);
       } else {
         p.variant++;
-        const repro = Object.entries(p.outcomes).every(([od, ov]) => ld.to[od] === ov);
+        // v3 Δ 语义：规则的 outcomes 是 Δ 类，复现 = 观测到的前后中心值变化分类与规则一致
+        const repro = Object.entries(p.outcomes).every(([od, ov]) => {
+          const c0 = ld.fromCenter?.[od], c1 = ld.toCenter?.[od];
+          if (!Number.isFinite(c0) || !Number.isFinite(c1)) return false;
+          return classifyChange(od, c0, c1) === ov;
+        });
         if (repro) {
           p.repro++; p.consecFail = 0;
           out(`[实验] ${dim} 变体 ${v}→${ld.from[dim]} 下结果仍复现（${p.repro} 次）——待下次重建差分排除`);

@@ -2,15 +2,16 @@
  * （模拟神经网络存规则——不是查表）。周期性从差分器全量重建（确定性物化视图：
  * 用 setWeight 绝对写入，强度 ∝ 支持度；结构变化即整网重建，无标签迁移问题）。
  *
- * 网络语义（与 FieldRuleMemory 同一家族但条件语义反转）：
- * - 因素场 → 核：W ∝ log(支持度)（因素维是规则参赛资格，缺一无点火资格）；
- * - 核 → 结果场：星型驱动边（只写实际变化的结果维——结果侧不稀释）；
- * - 否决 Γ：因素维的"已观察替代值"感受野 → 核（该维取别的值时本规则被压下）；
+ * 网络语义（与 FieldRuleMemory 同一家族但条件语义反转，v3 适配三态因素）：
+ * - 因素场 → 核：置信度归一化 W_tot·conf_d/Σconf（W_tot ∝ log 证据数 n）——核驱动与因素数无关；
+ * - 核 → 结果场：星型驱动边（序数/方位维写 Δ 档，类别维写新值——Δ 语义见 r2-diff v3）；
+ * - 否决 Γ：只挂 hard 维的"已观察替代值"感受野（soft 维证据不足，不压整条规则）；
  * - WTA 池：2 池神经元，联盟越大压制越强，逐淘汰至单核胜出（沿用 wireNewCore 拓扑）。
  *
  * 读出 = 规划链的"反查"接口：钳置查询帧 → 退火 → 获胜核 → 读其规则的因素与结果。
  */
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { kindOf } from './r2-diff.mjs';
 
 const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
@@ -59,21 +60,30 @@ export class FactorRuleNet {
     this.rules.forEach((rule, i) => { // 注意：核要挂在副本上（挂原数组上 predict 读不到——实测 bug）
       const core = Array.from({ length: CORE_SIZE }, (_, k) => coreBase + i * CORE_SIZE + k);
       rule.core = core;
-      // 因素场 → 核：强度随支持度对数增长
-      const w = Math.min(2.5, 0.8 + 0.15 * Math.log2(1 + rule.support));
-      for (const [dim, v] of Object.entries(rule.factors)) {
-        for (const f of this.enc.encodeDimension(dim, v)) for (const c of core) this.net.setWeight(f, c, w);
-        // 该因素维的已观察替代值 → 核 否决
+      // 因素场 → 核：w_d = W_tot·conf_d/|F|——按因素数归一化（宽规则不再天然更深），
+      // 但保留 conf 作权重：强 hard 因素的规则 > 弱 soft 因素的规则（特异性决胜），
+      // 实测教训：conf/Σconf 归一化把置信差异抹平，grip 噪声规则反超 logGrip 真规则
+      const W_tot = Math.min(2.5, 0.8 + 0.15 * Math.log2(1 + (rule.n ?? rule.support)));
+      const factorEntries = Object.entries(rule.factors);
+      const nF = Math.max(1, factorEntries.length);
+      for (const [dim, v] of factorEntries) {
+        const wd = W_tot * (rule.conf?.[dim] ?? 0.3) / nF;
+        for (const f of this.enc.encodeDimension(dim, v)) for (const c of core) this.net.setWeight(f, c, wd);
+        // 否决 Γ 只挂 hard 维（soft 维证据不足，压下整条规则太狠）
+        if (rule.hard && rule.hard[dim] === undefined) continue;
         for (const alt of altValues.get(dim) ?? []) {
-          if (alt === v) continue;
+          if (Math.abs(alt - v) <= 0.5) continue;
           for (const f of this.enc.encodeDimension(dim, alt)) for (const c of core) this.net.strengthenInhibitory(f, c, 1.2);
         }
       }
-      // 动作场 → 核（规则属于某动作，动作也是参赛条件）
-      for (const f of this.enc.encodeDimension('act', rule.action)) for (const c of core) this.net.setWeight(f, c, w);
-      // 核 → 结果场（星型，只写实际变化的结果维；写入独立的 nextXxx 命名空间）
+      // 动作场 → 核（参赛条件；随证据数缩放——无 hard 因素的规则之间由证据强弱分胜负，
+      // 否则"挖什么都加 grip"的真规则与噪声规则等深，退火随机选边，实测挖石头误报原木）
+      const wAct = 0.4 * (1 + 0.15 * Math.log2(1 + (rule.n ?? rule.support)));
+      for (const f of this.enc.encodeDimension('act', rule.action)) for (const c of core) this.net.setWeight(f, c, wAct);
+      // 核 → 结果场（星型；序数/方位维写 Δ 档（v+4 ∈ 0..8），类别维写新值——Δ 语义见 r2-diff v3）
       for (const [dim, v] of Object.entries(rule.outcomes)) {
-        for (const f of this.enc.encodeDimension(outName(dim), v)) for (const c of core) this.net.setWeight(c, f, 0.7);
+        const encV = kindOf(dim) === 'cat' ? v : v + 4;
+        for (const f of this.enc.encodeDimension(outName(dim), encV)) for (const c of core) this.net.setWeight(c, f, 0.7);
       }
       // WTA 池接线（沿用 wireNewCore 拓扑：单核沉睡，联盟点燃压制）
       for (const x of core) {
@@ -95,13 +105,14 @@ export class FactorRuleNet {
     // 严格门会全灭（实测 L2 敢答率 0），近似层如实标注不装无知，与 FieldRuleMemory 稀疏回退同一家族）
     const scored = [];
     for (const rule of this.rules) {
-      const dims = Object.keys(rule.factors);
+      // 反转点火门只数 hard 维（v3：soft 是证据不足的线索，不做参赛资格；hard 为空 = 无先决条件，恒有资格）
+      const dims = Object.keys(rule.hard ?? rule.factors);
       let sat = 0;
       for (const dim of dims) {
         const has = this.enc.encodeDimension(dim, query[dim]).some((f) => rule.core.some((c) => this.net.getWeight(f, c) > 0));
         if (has) sat++;
       }
-      scored.push({ rule, ratio: dims.length === 0 ? 0 : sat / dims.length });
+      scored.push({ rule, ratio: dims.length === 0 ? 1 : sat / dims.length });
     }
     let pool = scored.filter((s) => s.ratio >= 1);
     let approximate = false;
@@ -131,18 +142,26 @@ export class FactorRuleNet {
       if (on > bestOn) { bestOn = on; winner = rule; }
     }
     if (!winner || bestOn < 3) return { kind: 'ambiguous', rule: null, outcomes: null, energy: result.energy, converged: result.converged, approximate };
-    return { kind: 'usable', rule: winner, outcomes: { ...winner.outcomes }, energy: result.energy, converged: result.converged, terminationReason: result.terminationReason, approximate };
+    // 共变档案合并读出（v3）：挖原木时 logGrip/grip 一起变——它们是两条等深规则，
+    // 退火任选一个核都合法，读出时把 freq≥0.5 的共变 Δ 并入结果（双峰一致读出）
+    const merged = { ...winner.outcomes };
+    for (const [h, c] of Object.entries(winner.co ?? {})) if (merged[h] === undefined) merged[h] = c.delta;
+    return { kind: 'usable', rule: winner, outcomes: merged, energy: result.energy, converged: result.converged, terminationReason: result.terminationReason, approximate };
   }
 
   /** 轻量匹配（不退火）：规则因素在当前查询中的满足率，供探索打分用——
    * 语义如实标注为近似（不经过退火竞争，只做因素覆盖统计），用于"哪个动作有戏"的
    * 自适应偏好打分：偏好随规则库更新自动更新，不是手工写死。
-   * 中心值语义：因素与查询按中心值容差（0.6）匹配，不按索引号。 */
+   * 中心值语义 + 三态因素（v3）：hard 维缺一即出局（ratio=0）；soft 维计入满足率。 */
   matchRules(query, action) {
     return this.rules.filter((r) => r.action === action).map((r) => {
-      const dims = Object.keys(r.factors);
-      const sat = dims.filter((d) => Number.isFinite(query[d]) && Math.abs(query[d] - r.factors[d]) <= 0.6).length;
-      return { rule: r, ratio: dims.length === 0 ? 1 : sat / dims.length, support: r.support };
+      const hard = Object.entries(r.hard ?? r.factors);
+      const soft = Object.entries(r.soft ?? {});
+      const sat = (v) => (x) => Number.isFinite(x) && Math.abs(x - v) <= 0.6;
+      if (!hard.every(([d, v]) => sat(v)(query[d]))) return { rule: r, ratio: 0, support: r.support };
+      const softSat = soft.filter(([d, s]) => sat(s.v)(query[d])).length;
+      const total = hard.length + soft.length;
+      return { rule: r, ratio: total === 0 ? 1 : (hard.length + softSat) / total, support: r.support };
     }).filter((x) => x.ratio >= 0.75).sort((a, b) => b.ratio - a.ratio || b.rule.support - a.rule.support);
   }
 }

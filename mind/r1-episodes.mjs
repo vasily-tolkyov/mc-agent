@@ -26,7 +26,11 @@ export class EpisodeBuffer {
     };
     this.episodes.push(ep);
     if (this.episodes.length > this.capacity) this.episodes.splice(0, this.episodes.length - this.capacity);
-    if (this.persistPath) fs.appendFileSync(this.persistPath, JSON.stringify({ conditions: { ...ep.conditions, act }, outcomes: ep.outcomes }) + '\n');
+    // 持久化带裸值帧：概念索引跨轮漂移，只有裸值能离线重放 R2 输入（复审教训：没有它就无法回放对比新旧差分器）
+    if (this.persistPath) fs.appendFileSync(this.persistPath, JSON.stringify({
+      conditions: { ...ep.conditions, act }, outcomes: ep.outcomes,
+      rawConditions: ep.rawConditions, rawNext: ep.rawNext, weight,
+    }) + '\n');
     return ep;
   }
 
