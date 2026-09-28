@@ -70,7 +70,9 @@ export function sensoryFrame(bot) {
   if (drop) {
     itemDist = Math.min(8, Math.round(drop.position.distanceTo(p)));
     itemType = blockId(dropItemName(bot, drop)); // 物品名多对应方块名（oak_log）；非方块物品（lead 等）兜底 12
-    // 视觉约定 viewDir=(-sin(yaw), +cos(yaw))（本环境 yaw 镜像：看 dz=+cos，走 dz=−cos，已实证）
+    // 视觉约定 viewDir=(-sin(yaw), +cos(yaw))（本协议栈原生移动键与视线跨 x 轴镜像：
+    // forward 键裸位移=(-sin,-cos)——已在 body.mjs 用 MOVE_BASIS 组合键校准，
+    // 原语 forward/back 的实测位移 ≡ 视线/反视线，验证见 verify-movement-calib.mjs 16/16）
     const vx = -Math.sin(bot.entity.yaw), vz = Math.cos(bot.entity.yaw);
     const dx = drop.position.x - p.x, dz = drop.position.z - p.z;
     const len = Math.hypot(dx, dz);

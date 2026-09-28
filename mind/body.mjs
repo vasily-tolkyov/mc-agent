@@ -52,6 +52,38 @@ export function createBody({ host = '127.0.0.1', port = 25567, username = 'Proto
     await withTimeout(bot.look(yaw, p, true), 3000);
   };
 
+  // ── yaw 镜像校准（本协议栈实测：移动与视线跨 x 轴镜像——
+  // 视线 = (-sin,+cos)，forward 键位移 = (-sin,-cos)；8 朝向 × 4 键标定见
+  // verify-movement-calib.mjs。不修改按键物理映射，而是按当前 yaw 选组合键，
+  // 让原语 forward/back 的位移方向 ≡ 视线/反视线方向（8 组合方向，误差 ≤22.5°）。
+  // 注意：校准改变动作的物理语义——R1 每轮重学，旧语义情节不回放） ──
+  const MOVE_BASIS = {
+    forward: (y) => [-Math.sin(y), -Math.cos(y)],
+    back: (y) => [Math.sin(y), Math.cos(y)],
+    left: (y) => [-Math.cos(y), Math.sin(y)],
+    right: (y) => [Math.cos(y), -Math.sin(y)],
+  };
+  const COMBOS = [['forward'], ['back'], ['left'], ['right'],
+    ['forward', 'left'], ['forward', 'right'], ['back', 'left'], ['back', 'right']];
+  /** 朝世界方向 (vx,vz) 行走：在 8 个组合键方向中取与目标点积最大者（实测基变换） */
+  const driveToward = async (vx, vz, ms) => {
+    const yaw = bot.entity.yaw;
+    let best = null, bestDot = -Infinity;
+    for (const combo of COMBOS) {
+      let x = 0, z = 0;
+      for (const k of combo) { const [bx, bz] = MOVE_BASIS[k](yaw); x += bx; z += bz; }
+      const m = Math.hypot(x, z) || 1;
+      const dot = (x / m) * vx + (z / m) * vz;
+      if (dot > bestDot) { bestDot = dot; best = combo; }
+    }
+    for (const k of best) bot.setControlState(k, true);
+    await sleep(ms);
+    for (const k of best) bot.setControlState(k, false);
+    await sleep(140);
+  };
+  /** 视线方向（与 sensory.mjs 同一约定：viewDir=(-sin(yaw), +cos(yaw))） */
+  const viewDir = () => [-Math.sin(bot.entity.yaw), Math.cos(bot.entity.yaw)];
+
   return {
     bot, ready,
     isOnline: () => state.online,
@@ -77,8 +109,8 @@ export function createBody({ host = '127.0.0.1', port = 25567, username = 'Proto
     },
     async act(name) {
       switch (name) {
-        case 'forward': return drive('forward', 800);
-        case 'back': return drive('back', 600);
+        case 'forward': { const [vx, vz] = viewDir(); return driveToward(vx, vz, 800); } // 校准后：朝视线走
+        case 'back': { const [vx, vz] = viewDir(); return driveToward(-vx, -vz, 600); } // 校准后：背视线退
         case 'turnLeft': return look(bot.entity.yaw + Math.PI / 4, bot.entity.pitch);
         case 'turnRight': return look(bot.entity.yaw - Math.PI / 4, bot.entity.pitch);
         case 'jump': { bot.setControlState('jump', true); await sleep(450); bot.setControlState('jump', false); return sleep(140); }
