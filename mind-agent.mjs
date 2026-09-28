@@ -811,7 +811,7 @@ async function runGoalR123(spec) {
       const fmt = (r) => `${ACTION_NAMES[r.action]}[hard=${Object.entries(r.hard ?? r.factors).map(([d, v]) => `${d}=${typeof v === 'number' ? v.toFixed(1) : v}`).join(',')}${Object.keys(r.soft ?? {}).length ? ` soft=${Object.keys(r.soft).join(',')}` : ''}]→${JSON.stringify(r.outcomes)}(n${r.n ?? '?'} ρ${r.rho ?? '?'})`;
       out(`[R3] 物化规则 ${r3.rules.length}（logGrip 结果规则 ${lgRules.length}：${lgRules.slice(0, 3).map(fmt).join(' | ')}）：${changeRules.slice(0, 10).map(fmt).join(' | ')}${changeRules.length > 10 ? ' …' : ''}`);
     }
-    chain = planBackward({ rules: r3.rules, current: st.lastCenterState, goalDims: targets, maxDepth: 6, exclude: failedRules });
+    chain = planBackward({ rules: r3.rules, current: st.lastCenterState, goalDims: targets, maxDepth: 6, exclude: failedRules, candidatesFn: (t, f) => r3.planCandidates(f, t, 1 + retries) });
     if (chain.status !== 'found') {
       retries++;
       st.phase = 'goal-frontier';

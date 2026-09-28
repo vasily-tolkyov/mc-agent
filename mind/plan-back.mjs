@@ -59,7 +59,7 @@ const hardOf = (r) => r.hard ?? r.factors ?? {};
 const softOf = (r) => r.soft ?? {};
 const hardSat = (r, frame) => Object.entries(hardOf(r)).every(([d, v]) => sat1(frame[d], v));
 
-export function planBackward({ rules, current, goalDims, maxDepth = 6, exclude = null }) {
+export function planBackward({ rules, current, goalDims, maxDepth = 6, exclude = null, candidatesFn = null }) {
   const visited = new Set();
   const excluded = exclude ?? new Set();
   const ruleKey = (r) => `${r.action}|${JSON.stringify(r.outcomes)}`;
@@ -69,11 +69,12 @@ export function planBackward({ rules, current, goalDims, maxDepth = 6, exclude =
     const key = keyOf(targets);
     if (visited.has(key)) return null;
     visited.add(key);
-    // 反查：结果朝目标有进展的规则（Δ 语义；证据强度降序；执行禁忌表——本次尝试里
-    // 刚物理失败的规则不再重复选，反例的长期命运由 R2 统计决定，不在规划器里私判）
-    const cands = rules
+    // 反查候选：默认走网络退火读出（candidatesFn——钳置当前状态+目标结果场，浮上来的核才是候选；
+    // 浅井侥幸规则物理上浮不上来）；无网络时退回符号过滤（离线测试兜底）。
+    // 执行禁忌表：本次尝试里刚物理失败的规则不再重复选（反例的长期命运由 R2 统计决定）
+    const cands = (candidatesFn ? candidatesFn(targets, frame) : rules
+      .filter((r) => Object.entries(targets).some(([d, v]) => outcomeHits(r, d, frame[d], v))))
       .filter((r) => !excluded.has(ruleKey(r)))
-      .filter((r) => Object.entries(targets).some(([d, v]) => outcomeHits(r, d, frame[d], v)))
       .sort((a, b) => ruleScore(b) - ruleScore(a));
     for (const rule of cands) {
       const assumptions = [];

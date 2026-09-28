@@ -63,7 +63,12 @@ export class FactorRuleNet {
       // 因素场 → 核：w_d = W_tot·conf_d/|F|——按因素数归一化（宽规则不再天然更深），
       // 但保留 conf 作权重：强 hard 因素的规则 > 弱 soft 因素的规则（特异性决胜），
       // 实测教训：conf/Σconf 归一化把置信差异抹平，grip 噪声规则反超 logGrip 真规则
-      const W_tot = Math.min(2.5, 0.8 + 0.15 * Math.log2(1 + (rule.n ?? rule.support)));
+      // 证据深度（赫布本义：连接强度 ∝ 共现证据）：E=n·ρ（证据数×复现率下界）。
+      // 侥幸模式（n=2, ρ=0.005 → E≈0.01）的连接弱到物理上点不燃一个 4 神经元核
+      // （驱动 ≪ θ=Ea+Em=1.5）——"反复出现才成规则"由地形深度自然带来，不是计数闸门。
+      const evN = (rule.n ?? 1) * (rule.rho ?? 0.5);
+      const depth = 0.12 + 0.88 * Math.min(1, evN / 2.5);
+      const W_tot = Math.min(2.5, 0.8 + 0.15 * Math.log2(1 + (rule.n ?? rule.support))) * depth;
       const factorEntries = Object.entries(rule.factors);
       const nF = Math.max(1, factorEntries.length);
       for (const [dim, v] of factorEntries) {
@@ -76,14 +81,15 @@ export class FactorRuleNet {
           for (const f of this.enc.encodeDimension(dim, alt)) for (const c of core) this.net.strengthenInhibitory(f, c, 1.2);
         }
       }
-      // 动作场 → 核（参赛条件；随证据数缩放——无 hard 因素的规则之间由证据强弱分胜负，
-      // 否则"挖什么都加 grip"的真规则与噪声规则等深，退火随机选边，实测挖石头误报原木）
-      const wAct = 0.4 * (1 + 0.15 * Math.log2(1 + (rule.n ?? rule.support)));
+      // 动作场 → 核（参赛条件；同样乘证据深度——无 hard 因素的侥幸规则唯一的驱动来源
+      // 就是动作边，不乘深度它会在任何该动作的查询里点燃，实测垃圾规则躺赢退火的根因）
+      const wAct = 0.4 * (1 + 0.15 * Math.log2(1 + (rule.n ?? rule.support))) * depth;
       for (const f of this.enc.encodeDimension('act', rule.action)) for (const c of core) this.net.setWeight(f, c, wAct);
-      // 核 → 结果场（星型；序数/方位维写 Δ 档（v+4 ∈ 0..8），类别维写新值——Δ 语义见 r2-diff v3）
+      // 核 → 结果场（星型；序数/方位维写 Δ 档（v+4 ∈ 0..8），类别维写新值——Δ 语义见 r2-diff v3；
+      // 结果边也乘深度：核侥幸点燃时结果场也不该亮，读出层就压得住）
       for (const [dim, v] of Object.entries(rule.outcomes)) {
         const encV = kindOf(dim) === 'cat' ? v : v + 4;
-        for (const f of this.enc.encodeDimension(outName(dim), encV)) for (const c of core) this.net.setWeight(c, f, 0.7);
+        for (const f of this.enc.encodeDimension(outName(dim), encV)) for (const c of core) this.net.setWeight(c, f, 0.7 * depth);
       }
       // WTA 池接线（沿用 wireNewCore 拓扑：单核沉睡，联盟点燃压制）
       for (const x of core) {
@@ -147,6 +153,65 @@ export class FactorRuleNet {
     const merged = { ...winner.outcomes };
     for (const [h, c] of Object.entries(winner.co ?? {})) if (merged[h] === undefined) merged[h] = c.delta;
     return { kind: 'usable', rule: winner, outcomes: merged, energy: result.energy, converged: result.converged, terminationReason: result.terminationReason, approximate };
+  }
+
+  /** 规划候选的退火读出（机制本义：候选由地形浮出，不由符号数组过滤）：
+   * 钳置当前状态（因素场）+ 目标维的结果场（能产生产生进展的 Δ 类/新值），
+   * 结果场经对称 W 反向驱动触及目标的核——退火后浮上来（≥3/4 核激活）的才是候选。
+   * 浅井（低证据侥幸规则）物理上浮不上来：它们的核边弱到点不燃（见 rebuild 的 depth）。
+   * 返回按证据强度排序的规则（结果已合并共变档案）。 */
+  planCandidates(query, goalTargets, seed = 1) {
+    if (!this.net || !this.rules.length) return [];
+    // 结果场钳置：目标维 → 能进展的 Δ 类（序数/方位）或目标新值（类别）
+    const goalClamps = [];
+    for (const [d, want] of Object.entries(goalTargets)) {
+      const dimName = outName(d);
+      const cur = query[d];
+      if (kindOf(d) === 'cat') {
+        if (Number.isFinite(want)) goalClamps.push(...this.enc.encodeDimension(dimName, want));
+        continue;
+      }
+      if (!Number.isFinite(cur)) continue;
+      // 进展钳制（不是命中钳制）：Δ+1 让 logGrip 0→1 虽没到 2，但距目标更近——
+      // 只钳"一步到位"的 Δ 会让 dig Δ+1 永远拿不到结果场驱动（实测 0→2 目标断链的根因）
+      const d0 = want && typeof want === 'object' && 'min' in want
+        ? (cur < want.min ? want.min - cur : cur > want.max ? cur - want.max : 0)
+        : Math.abs(cur - want);
+      for (let dl = -3; dl <= 3; dl++) {
+        const after = cur + dl;
+        const d1 = want && typeof want === 'object' && 'min' in want
+          ? (after < want.min ? want.min - after : after > want.max ? after - want.max : 0)
+          : Math.abs(after - want);
+        if (d1 < d0) goalClamps.push(...this.enc.encodeDimension(dimName, dl + 4));
+      }
+    }
+    if (!goalClamps.length) return [];
+    const input = [...this.enc.encode(query), ...goalClamps];
+    // 反转门：hard 因素在查询中有支持（与 predict 同一语义）
+    const gated = this.rules.filter((rule) => {
+      const dims = Object.keys(rule.hard ?? rule.factors);
+      return dims.every((dim) => this.enc.encodeDimension(dim, query[dim]).some((f) => rule.core.some((c) => this.net.getWeight(f, c) > 0)));
+    });
+    if (!gated.length) return [];
+    const result = this.net.settleAnnealed(input, [], {
+      seed,
+      extraCandidates: [...gated.flatMap((r) => r.core), ...goalClamps, ...Array.from({ length: POOL_SIZE }, (_, k) => this.poolBase + k)],
+      quenchCandidatesOnly: true,
+      quenchMaxFlips: 8 * this.net.neuronCount,
+      fallbackQuietOnly: true,
+      levels: 12,
+      sweepsPerLevel: 24,
+    });
+    const active = new Set(result.activeNeurons);
+    return gated
+      .map((r) => ({ rule: r, on: r.core.filter((c) => active.has(c)).length }))
+      .filter((x) => x.on >= 3)
+      .map((x) => {
+        const merged = { ...x.rule.outcomes };
+        for (const [h, c] of Object.entries(x.rule.co ?? {})) if (merged[h] === undefined) merged[h] = c.delta;
+        return { ...x.rule, outcomes: merged };
+      })
+      .sort((a, b) => (b.rho ?? 0.5) * Math.log2(2 + (b.n ?? 1)) - (a.rho ?? 0.5) * Math.log2(2 + (a.n ?? 1)));
   }
 
   /** 轻量匹配（不退火）：规则因素在当前查询中的满足率，供探索打分用——

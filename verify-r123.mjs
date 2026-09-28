@@ -59,6 +59,14 @@ for (let i = 0; i < 12; i++) {
   const cond = { ...base(), nearType: rnd() < 0.3 ? OAK : AIR, grip, logGrip };
   r1.record(cond, rnd() < 0.5 ? FORWARD : TURN, noiseOutcomes(cond));
 }
+// 侥幸污染（真实流的 junk 来源）：2 条 slotNext 情节里 logGrip 恰好 +2（吸入延迟张冠李戴）——
+// 机制检验点：这种 2 情节的巧合模式在退火地形上应弱到点不燃，绝不能劫持预测/规划
+const SLOT = 7;
+for (let i = 0; i < 2; i++) {
+  const cond = { ...base(), nearType: AIR, grip, logGrip };
+  r1.record(cond, SLOT, { ...noiseOutcomes(cond), logGrip: logGrip + 2, grip: grip + 2 });
+  logGrip += 2; grip += 2;
+}
 
 const r2 = new DifferentialExtractor({});
 r2.ingestAll(r1.recent());
@@ -93,10 +101,16 @@ const p2 = r3.predict({ ...novel, nearType: STONE }, DIG, 7);
 console.log(`── 否决：nearType=石头时不许报原木 ──`);
 console.log(`kind=${p2.kind} 结果=${JSON.stringify(p2.outcomes)} → ${p2.outcomes?.logGrip === undefined ? '✓ 没有错误泛化' : '✗ 错误泛化'}`);
 
-// 规划链：Δ 规则重复应用（logGrip 0→2 = dig×2）
-const plan = planBackward({ rules, current: { ...novel, logGrip: 0 }, goalDims: { logGrip: 2 }, maxDepth: 6 });
+// 规划链：Δ 规则重复应用（logGrip 0→2 = dig×2）——走网络退火读出（candidatesFn），
+// 同时检验侥幸规则（slotNext Δ+2，2 情节巧合）不会浮上来劫持规划
+const plan = planBackward({ rules, current: { ...novel, logGrip: 0 }, goalDims: { logGrip: 2 }, maxDepth: 6, candidatesFn: (t, f) => r3.planCandidates(f, t, 3) });
 console.log(`── 规划链 ③：目标 logGrip=2，当前 nearType=原木 logGrip=0 ──`);
-console.log(`status=${plan.status} 链 ${plan.steps.length} 节（${plan.steps.map((r) => 'dig Δ+1').join(' → ')}）→ ${plan.status === 'found' && plan.steps.length === 2 ? '✓ Δ 规则重复应用成链' : '✗'}`);
+console.log(`status=${plan.status} 链 ${plan.steps.length} 节（${plan.steps.map((r) => `${r.action === DIG ? 'dig' : '?' } Δ+1`).join(' → ')}）→ ${plan.status === 'found' && plan.steps.length === 2 && plan.steps.every((r) => r.action === DIG) ? '✓ Δ 规则重复应用成链（侥幸规则未劫持）' : '✗'}`);
+
+// 侥幸抑制单测：planCandidates 的返回里不许出现 slotNext 侥幸规则
+const surfaced = r3.planCandidates({ ...novel, logGrip: 0 }, { logGrip: 2 }, 3);
+const flukeSurfaced = surfaced.some((r) => r.action === SLOT);
+console.log(`── 侥幸抑制 ⑥：浮上候选的规则 ${surfaced.length} 条（${surfaced.map((r) => `act${r.action}`).join(',') || '无'}）→ ${!flukeSurfaced ? '✓ slotNext 侥幸未浮出' : '✗ 侥幸劫持'}`);
 
 // 证据缺口：nearType=石头时应有 evidence-gap 且点名 nearType
 const plan2 = planBackward({ rules, current: { ...novel, nearType: STONE, logGrip: 0 }, goalDims: { logGrip: 1 }, maxDepth: 6 });
@@ -110,6 +124,7 @@ console.log(`── 缺失规则 ⑤：目标 belowType=7（没挖过/没踩过�
 console.log(`status=${plan3.status} → ${['missing-rule', 'evidence-gap', 'found'].includes(plan3.status) ? `✓ 如实上报（${plan3.status}）` : '✗'}`);
 
 const pass = t1 && !bad && p1.kind === 'usable' && p1.outcomes?.logGrip === 1 && p2.outcomes?.logGrip === undefined
-  && plan.status === 'found' && plan.steps.length === 2 && plan2.status === 'evidence-gap' && named;
+  && plan.status === 'found' && plan.steps.length === 2 && plan.steps.every((r) => r.action === DIG)
+  && plan2.status === 'evidence-gap' && named && !flukeSurfaced;
 console.log(`\n${pass ? '✓✓ 全部通过' : '✗✗ 有未通过项'}`);
 process.exit(pass ? 0 : 1);
