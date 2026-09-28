@@ -35,6 +35,15 @@ for (let i = 0; i < 32; i++) {
   PATCHES.push({ name: "wall", fill: [wx, Y, wz, wx, Y + 1, wz, "minecraft:cobblestone"] });
 }
 
+// 场地围墙（操作员盖教室）：原型随机游走+挖掘会走出 ±24 维护区，掉进历届旧坑卡死
+// （goto 两次熔断位置不变的实测根因）。2 格高石墙圈住 ±22，学习/导航都在场内。
+for (let i = -22; i <= 22; i++) {
+  PATCHES.push({ name: "fence", fill: [i, Y, -22, i, Y + 1, -22, "minecraft:cobblestone"] });
+  PATCHES.push({ name: "fence", fill: [i, Y, 22, i, Y + 1, 22, "minecraft:cobblestone"] });
+  PATCHES.push({ name: "fence", fill: [-22, Y, i, -22, Y + 1, i, "minecraft:cobblestone"] });
+  PATCHES.push({ name: "fence", fill: [22, Y, i, 22, Y + 1, i, "minecraft:cobblestone"] });
+}
+
 bot.once("spawn", async () => {
   await sleep(1500);
   // 先清场：历次课程/测试留下的挖掘坑与随手放的方块会卡住寻路（实测 z=-2.3 反复卡死）。

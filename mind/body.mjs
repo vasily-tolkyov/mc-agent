@@ -61,12 +61,17 @@ export function createBody({ host = '127.0.0.1', port = 25567, username = 'Proto
       const dx = x - p.x, dz = z - p.z, dy = y - (p.y + 1.62);
       await look(Math.atan2(-dx, dz), Math.atan2(-dy, Math.hypot(dx, dz)));
     },
-    /** 教师带路用：真实寻路走到目标附近（pathfinder 导航，不是传送；带熔断）。 */
+    /** 教师带路用：真实寻路走到目标附近（pathfinder 导航，不是传送；熔断随距离伸缩）。
+     * GoalNearXZ 只管水平距离（GoalNear 的 y 判定让"已到目标"永不完成的实测根因）；
+     * 已在半径内直接返回——pathfinder 对"无路可走的已满足目标"不发事件、挂到熔断（又一实测根因）。 */
     async goto(x, z, r = 1.5) {
+      const dist = Math.hypot(x - bot.entity.position.x, z - bot.entity.position.z);
+      if (dist <= r) { process.stderr.write(`[goto] 已在半径内 (${dist.toFixed(1)}m ≤ ${r}m)，直接返回\n`); return; }
       if (!bot.pathfinder.movements) bot.pathfinder.setMovements(new Movements(bot, minecraftData(bot.version)));
       const t0 = Date.now();
+      const fuseMs = Math.max(15000, dist * 1200); // 步行 ~4.3m/s 留 2.8 倍余量
       process.stderr.write(`[goto] 发起 (${x},${z}) 当前 y=${bot.entity.position.y.toFixed(1)}\n`);
-      await withTimeout(bot.pathfinder.goto(new goals.GoalNear(x, bot.entity.position.y, z, r)), 15000,
+      await withTimeout(bot.pathfinder.goto(new goals.GoalNearXZ(x, z, r)), fuseMs,
         () => { try { bot.pathfinder.setGoal(null); } catch { /* */ } });
       process.stderr.write(`[goto] 返回 ${((Date.now() - t0) / 1000).toFixed(1)}s pos=${bot.entity.position.toString()}\n`);
     },

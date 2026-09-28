@@ -202,7 +202,8 @@ function markProduce(nearType, x, z) {
  * 带时间戳：掉落物 ~5min 消失，过期的在 spatialFields 里如实剔除） */
 function markSighting(kind, x, z) {
   const key = `seen:${kind}:${Math.round(x / 4)},${Math.round(z / 4)}`;
-  landmarks.set(key, { x, z, ts: Date.now(), sighting: true });
+  const prev = landmarks.get(key);
+  landmarks.set(key, { x, z, ts: Date.now(), sighting: true, lastVisit: prev?.lastVisit ?? 0 }); // lastVisit 要保留——否则回访排序永远把刚刷新过的点顶回最前
 }
 
 // 概念空间（固定档，启动即建）
@@ -680,15 +681,31 @@ async function frontierRound(goalDims, round, goalTargets = null) {
     const lm = sorted[0];
     if (lm && Math.hypot(lm.x - p.x, lm.z - p.z) <= 120) {
       lm.lastVisit = st.decisions;
-      if (lm.sighting) { // 目击点：掉落物在那——站上去做中性动作等吸入（不瞎挖）
-        out(`[前沿] 回访目击地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})，走近等吸入`);
-        await body.goto(lm.x, lm.z, 0.8);
-        await step(9); await step(7); await step(9); await step(7); // 俯身/换槽：中性动作，吸入在步内落账
+      if (lm.sighting) { // 目击点：掉落物在那——goto 到点附近后用规则打分主动逼近到吸入圈（实测：站着等
+        // 掉落物在 2m 外永不吸入——MC 吸入半径 ~1.2m，必须主动逼近；frontierAction 按规则打分选逼近动作）
+        out(`[前沿] 回访目击地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})，逼近吸入`);
+        await body.goto(lm.x, lm.z, 1.2);
+        const gripBefore = st.lastFrame?.grip ?? 0;
+        for (let s = 0; s < 6; s++) {
+          await step(frontierAction(['itemDist'], { itemDist: [0, 1] }));
+          if ((st.lastFrame?.itemDist ?? 8) >= 8) break; // 掉落物没了（吸入或消失）就停
+        }
+        // 扑空核验：没吸入且视野内无掉落物 → 该目击点已空，删除（不再回访——空点反复顶头的实测根因）
+        if ((st.lastFrame?.grip ?? 0) === gripBefore && (st.lastFrame?.itemDist ?? 8) >= 8) {
+          for (const [k, v] of landmarks) if (v === lm) { landmarks.delete(k); break; }
+          out('[前沿] 目击点已空（掉落物消失），地标删除');
+        }
       } else {
         out(`[前沿] 回访产出地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})，在产地环视挖掘`);
         await body.goto(lm.x, lm.z, 2.0);
         for (let s = 0; s < 4 && (st.lastFrame?.logGrip ?? 0) === 0; s++) {
-          await body.lookAt(lm.x, -58.5, lm.z); // 柱状残余（挖剩的原木浮在空中）
+          // 挖真实的原木块：找地标 8m 内实际存在的 oak_log 再瞄准——不挖记忆点的空气
+          // （柱状残余挖空后朝记忆点挖 = 挖空气熔断 9s×N 的实测根因）
+          const ids = body.bot.registry.blocksByName;
+          const logIds = ['oak_log', 'oak_planks'].map((n) => ids[n]?.id).filter((x) => x !== undefined);
+          const blk = body.bot.findBlocks({ point: body.bot.entity.position, maxDistance: 8, matching: logIds, count: 1 })[0];
+          if (!blk) { out('[前沿] 地标 8m 内已无原木/木板块，转目击行为'); await step(9); await step(7); break; }
+          await body.lookAt(blk.x + 0.5, blk.y + 0.5, blk.z + 0.5);
           await step(5);
           if (!SKIP_PICKUP) await collectLesson();
           else { await step(0); await step(0); } // L4：只有原语动作，拾取靠自己撞上
@@ -1004,6 +1021,7 @@ async function runLevelsProtocol(level4) {
     for (const it of logs) await body.bot.tossStack(it).catch(() => {});
     clears++;
     const p = body.bot.entity.position;
+    markSighting(4, p.x, p.z); // 丢弃点进目击地标：自己丢的原木就躺在那——自传体记忆（非作弊：丢是原型自己的动作）
     await body.goto(p.x + 12, p.z, 1.5); // 丢完立刻远离 12m：走出重吸半径（边走边吸回、8 批仍剩 1 的根因）
     await step(7); // 刷新帧读裸值
   }
