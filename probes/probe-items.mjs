@@ -2,8 +2,8 @@
  * 转身看方位档变化 → 用 'back'（镜像约定：back 朝视线方向移动）走过去捡起，确认 itemDist 回到 8。
  * 注意：bot.dig 内部会用 mineflayer 原生 lookAt（与本环境视觉镜像相反）把视线甩走，
  * 挖完必须 body.lookAt 重新看向掉落物，否则方位档是"看着别处"的值（如实但不符合探针意图）。 */
-import { createBody } from './mind/body.mjs';
-import { sensoryFrame, raycastForward } from './mind/sensory.mjs';
+import { createBody } from '../mind/body.mjs';
+import { sensoryFrame, raycastForward } from '../mind/sensory.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const body = createBody({ username: `IT${Date.now() % 100000}` });

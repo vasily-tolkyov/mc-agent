@@ -1,4 +1,4 @@
-import { worldToBody } from '../kairos-v5-predictive-agent/dist/src/perception.js';
+import { worldToBody } from '../../../kairos-v5-predictive-agent/dist/src/perception.js'; // 存档线：仓库同级的上游克隆
 
 /** 自我中心关系通道包装器：在适配层观察上就地注入派生标量（不改 kairos 核心、不破坏快照锁）。
  * 注入量（核心的学习输入会自动把它们收为 self/<name> 感受器）：

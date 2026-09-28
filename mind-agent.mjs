@@ -4,9 +4,9 @@
  * 不分阶段、互不停止：
  *   - 概念学习永不停止（每个真实感知帧都喂共现成阱）；
  *   - 规则学习永不停止（每个动作写 R1 情节（只记变化结果维）→ R2A 分组 → R2B 差分成因素规则）；
- *   - 目标模式随时可进（R3 因素规则网反查规划链 + 缺规则前沿探索；RULES_ENGINE=legacy 可切回样本登记做 A/B）；
+ *   - 目标模式随时可进（R3 因素规则网反查规划链 + 缺规则前沿探索）；
  *   - 概念索引稳定：稳定注册表只追加不洗牌（成员重叠 ≥0.5 继承索引），规则记忆不漂；
- *   - 状态空间固定：每维 cap+1 档（含未知档），TransitionMemory 启动即建；
+ *   - 状态空间固定：每维 cap+1 档（含未知档）；
  *   - 视觉流（mind/retina.mjs）：8×8 体素视网膜 → 独立概念网络成井 → viewWell 维进主层；
  *   - 空间流：掉落物实体进感知帧（itemDist/itemType/itemBearing——"走过去能捡到"可学可规划）；
  *   - 无目标空转时主动控制变量实验（mind/experiments.mjs）：对"全历史从未变化"的存疑因素维
@@ -30,7 +30,7 @@ import { createBody, ACTION_NAMES } from './mind/body.mjs';
 import { sensoryFrame, SENSORY_DIMS, DIM_NAMES, BLOCK_IDS, raycastForward } from './mind/sensory.mjs';
 import { RetinaStream, retinaGrid } from './mind/retina.mjs';
 import { EpisodeBuffer } from './mind/r1-episodes.mjs';
-import { DifferentialExtractor, kindOf } from './mind/r2-diff.mjs';
+import { DifferentialExtractor, kindOf, applyChange } from './mind/r2-diff.mjs';
 import { FactorRuleNet, setR3NetClass } from './mind/r3-rules.mjs';
 import { planBackward } from './mind/plan-back.mjs';
 import { ExperimentScheduler } from './mind/experiments.mjs';
@@ -48,9 +48,6 @@ const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { SensoryEncoder } = await imp('dist/src/pop/concept/sensory.js');
 const { ConceptFormation } = await imp('dist/src/pop/concept/formation.js');
-const { TransitionMemory } = await imp('dist/src/planning/transition-memory.js');
-const { planGoalAsync } = await imp('dist/src/planning/planner.js');
-const { executeGoal } = await imp('dist/src/planning/execute.js');
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')));
 const RUNS = path.join(ROOT, 'runs');
@@ -61,7 +58,6 @@ fs.writeFileSync(LOG, '');
 const out = (s) => { console.log(s); fs.appendFileSync(LOG, s + '\n'); };
 
 const ID_NAMES = Object.fromEntries(Object.entries(BLOCK_IDS).map(([k, v]) => [v, k]));
-const DIAMETER = 14;
 
 /** 每维概念容量上限（+1 未知档）：类型维=方块字母表，连续维=8 个区，viewWell=13 视觉井槽+未识别 */
 const CONCEPT_CAPS = { nearDist: 8, nearType: 13, belowType: 13, grip: 8, logGrip: 8, speed: 8, onGround: 2, viewWell: 14, itemDist: 9, itemType: 13, itemBearing: 9, goalBearing: 9, goalDist: 9 };
@@ -123,9 +119,9 @@ function rebuildR3() {
       altValues.get(d).add(centerOf(d, v)); // 否决源也用中心值
     }
   }
-  // 罕见但关键的单次观察规则（support=1）也放行：计票制管的是"改判"，不是"存在"
-  r3.rebuild(r2.allRules().filter((r) => Object.keys(r.outcomes).length > 0 && r.support >= 1), altValues);
-  st.rules = ENGINE === 'r123' ? r3.rules.length : mem.mem.ruleCount;
+  // 单次观察规则也进地形：它们的核边浅到点不燃（R3 证据深度），"反复出现才成规则"由地形带来，不设计数闸门
+  r3.rebuild(r2.allRules(), altValues);
+  st.rules = r3.rules.length;
   if (process.env.CURRIC_DEBUG === '1') {
     const lg = r3.rules.filter((r) => r.outcomes.logGrip !== undefined);
     const lgEps = r1.recent().filter((e) => e.rawNext && e.rawNext.logGrip !== e.rawConditions.logGrip);
@@ -182,10 +178,8 @@ const st = {
   goal: null, goalReport: null, paused: false, teacher: true,
 };
 
-let body, enc, formation, registry, mem, retina, r1, r2, r3, ring, pInt, ringYawOffset, experiments = null, rngState = 20260924;
+let body, enc, formation, registry, retina, r1, r2, r3, ring, pInt, ringYawOffset, experiments = null, rngState = 20260924;
 let prevStepRec = null, prev2StepRec = null; // 前两步登记快照（滞后归因：效果跨 1-2 帧落账是物理常态）
-/** 规则引擎：'r123'（默认，R1 经验→R2 差分→R3 因素规则+反向链接）|'legacy'（样本登记 A/B 对照） */
-const ENGINE = process.env.RULES_ENGINE ?? 'r123';
 const rng = () => { rngState = (rngState * 1664525 + 1013904223) >>> 0; return rngState / 4294967296; };
 const actionObs = {};
 const actionAffects = new Map();
@@ -206,13 +200,6 @@ function markSighting(kind, x, z) {
   landmarks.set(key, { x, z, ts: Date.now(), sighting: true, lastVisit: prev?.lastVisit ?? 0 }); // lastVisit 要保留——否则回访排序永远把刚刷新过的点顶回最前
 }
 
-// 概念空间（固定档，启动即建）
-const CONCEPT_SPACE = {
-  states: DIM_NAMES.map((name) => ({ name, outcome: 'next' + name[0].toUpperCase() + name.slice(1), bins: CONCEPT_CAPS[name] + 1 })),
-  actions: [{ name: 'act', bins: ACTION_NAMES.length }],
-  diameter: DIAMETER,
-};
-
 function resolveFrame(frame) {
   const out = {};
   for (const d of DIM_NAMES) out[d] = registry.resolve(d, frame[d]) ?? CONCEPT_CAPS[d]; // 未知档
@@ -228,10 +215,6 @@ function resolveFrameCenter(frame) {
   }
   return out;
 }
-function outcomesOf(cNext) {
-  return Object.fromEntries(CONCEPT_SPACE.states.map((d) => [d.outcome, cNext[d.name]]));
-}
-function actionOf(index) { return mem.actions.find((a) => a.values.act === index); }
 
 function cStateReadable(cState) {
   const out_ = {};
@@ -261,7 +244,6 @@ async function orbitLearn(target, label) {
     await body.lookAt(target.x, -59.5, target.z);
     for (let r = 0; r < 3; r++) retina.observe(retinaGrid(body.bot));
   }
-  retina.refreshWells();
   const tagged = retina.labelCurrent(retinaGrid(body.bot), label);
   out(`[视觉课] ${label} → ${tagged ? `井#${tagged.stableIndex}（成员 ${tagged.members}，能量 ${tagged.energy.toFixed(1)}）` : '未落井（继续攒视角）'}`);
 }
@@ -437,7 +419,7 @@ function frontierAction(goalDims, goalTargets = null) {
   let bestIdx = 0, bestScore = -Infinity;
   for (let idx = 0; idx < ACTION_NAMES.length; idx++) {
     let score = rng() * 0.5;
-    if (ENGINE === 'r123' && r3.rules.length && st.lastCenterState) {
+    if (r3.rules.length && st.lastCenterState) {
       const ms = r3.matchRules(st.lastCenterState, idx); // 轻量近似匹配（不退火；中心值态）
       if (ms.length) {
         const out = ms[0].rule.outcomes;
@@ -465,8 +447,13 @@ function frontierAction(goalDims, goalTargets = null) {
 }
 
 /** 抢占注意力（果蝇式 onset 显著性）：掉落物突然出现 = 刺激驱动注意捕获。
- * 掉落物进视野 → 抢占当前注意力 → 它自然成为新目标（自适应长出，非手工偏好）。
- * 抢占窗内主循环把"接近掉落物"作为微目标（规则打分驱动）；窗口过期或吸入了就释放。 */
+ * 掉落物进视野 → 抢占当前注意力 → 它自然成为新目标。
+ * 抢占窗内主循环把"接近掉落物"作为微目标（规则打分驱动）；窗口过期或吸入了就释放。
+ * 如实标注：注意力事件的种类（掉落物 onset / 背包变化 / 掉落物拉近）是本层的感知先验，
+ * 只有"用哪个动作接近"是从规则库长出来的（frontierAction）。 */
+const attentionActive = () => !!st.attentionCapture && st.decisions < st.attentionCapture.until;
+/** 抢占窗微目标：接近掉落物（itemDist → 0..1）。所有抢占窗内的动作选择都走这一处。 */
+const approachItemAction = () => frontierAction(['itemDist'], { itemDist: [0, 1] });
 function updateAttentionCapture() {
   const cur = st.lastFrame;
   const prevDist = st._prevItemDist ?? 8;
@@ -529,13 +516,19 @@ function spatialFields() {
   return { goalBearing: sector, goalDist: Math.min(8, Math.round(bd.dist)) };
 }
 
-/** 单个决策步：感知帧喂概念 → 概念态 → 动作 → 真实后继 → 写规则 + 效果直方图。所有学习永不停止。 */
+/** 周期物化：概念注册表刷新 → R3 从 R1 裸值全量重差分重建（课程期不刷=全未知档废料、L2 空心的真根因） */
+function periodicRebuild() {
+  registry.refresh(formation.extractConcepts(0.5));
+  rebuildR3();
+  st.concepts = registry.all().length;
+}
+
+/** 单个决策步：感知帧喂概念 → 概念态 → 动作 → 真实后继 → 写 R1 情节 + 效果直方图。所有学习永不停止。 */
 async function step(actIdx, { learn = true } = {}) {
   const frame = perceive();
   st.lastFrame = frame;
   formation.presentExperiment(frame, 4); // 概念学习永不停止
   const cState = resolveFrame(frame);
-  const action = actionOf(actIdx);
   const yaw0 = body.bot.entity.yaw, pos0 = body.bot.entity.position.clone();
   await body.act(ACTION_NAMES[actIdx]);
   // 空间积分（果蝇自身运动积分）：真实转角进罗盘环，真实位移投影进路径积分器
@@ -564,8 +557,8 @@ async function step(actIdx, { learn = true } = {}) {
     const changed = {};
     for (const d of DIM_NAMES) if (cNext[d] !== cState[d]) changed[d] = cNext[d];
     // 效价门控（果蝇多巴胺广播）：抢占窗内 / 背包变化 / 掉落物拉近 = 重要事件——
-    // 单次顶多次（支持度加权 ×3 + 概念强写入一遍），规则单次成型不等重复
-    const valence = (st.attentionCapture && st.decisions < st.attentionCapture.until)
+    // 单次顶多次（R1 支持度 ×3 → R3 势阱深度；概念层再强写入一遍）
+    const valence = attentionActive()
       || cNext.grip !== cState.grip || cNext.logGrip !== cState.logGrip
       || (next.itemDist ?? 8) < (frame.itemDist ?? 8);
     r1.record(cState, actIdx, changed, frame, next, valence ? 3 : 1);
@@ -582,22 +575,16 @@ async function step(actIdx, { learn = true } = {}) {
     prev2StepRec = prevStepRec;
     prevStepRec = { cState, actIdx, frame, changed };
     if (valence) { formation.presentExperiment(next, 4); formation.presentExperiment(frame, 4); }
-    if (ENGINE === 'legacy') mem.observe(cState, action, outcomesOf(cNext)); // A/B 对照才走样本登记
     actionObs[actIdx] = (actionObs[actIdx] ?? 0) + 1;
     for (const d of DIM_NAMES) if (cNext[d] !== cState[d]) {
       const key = `${actIdx}:${d}`;
       actionAffects.set(key, (actionAffects.get(key) ?? 0) + 1);
     }
     st.writes++;
-    st.rules = ENGINE === 'r123' ? r3.rules.length : mem.mem.ruleCount;
+    st.rules = r3.rules.length;
   }
   st.decisions++;
-  if (st.decisions % 50 === 0) { // 概念注册表/R3 随决策滚动刷新（课程期不刷=全未知档废料、L2 空心的真根因）
-    registry.refresh(formation.extractConcepts(0.5));
-    retina.refreshWells();
-    rebuildR3();
-    st.concepts = registry.all().length;
-  }
+  if (st.decisions % 50 === 0) periodicRebuild(); // 概念注册表/R3 随决策滚动刷新
   st.lastCState = cNext;
   st.lastCenterState = resolveFrameCenter(next); // 中心值态（大修地基：R3/规划全走这个）
   st.lastDecision = { action: ACTION_NAMES[actIdx], from: cState, to: cNext, fromCenter: resolveFrameCenter(frame), toCenter: { ...st.lastCenterState } }; // 中心值帧：实验调度器的 Δ 复现判定用
@@ -616,15 +603,6 @@ async function step(actIdx, { learn = true } = {}) {
   if (st.decisions % 100 === 0) out(`[决策] ${st.decisions}，规则 ${st.rules}，概念 ${st.concepts}，写入 ${st.writes}，地标 ${landmarks.size}`);
   return cNext;
 }
-
-const embodiedBench = {
-  async conduct(_state, action) { // 具身：不能传送设状态，只真实执行并读出真实后继
-    await body.act(ACTION_NAMES[action.act]);
-    const next = perceive();
-    formation.presentExperiment(next, 4); // 执行帧也学概念
-    return outcomesOf(resolveFrame(next));
-  },
-};
 
 /** {dim:{gte|lte|eq:v} 或 {dim:{name:"oak_log"}} → 概念目标帧（只含目标维的**区间**）。
  * 区间语义是 gte/lte 的原生形态（gte:1 = [0.7, +∞)——中心值化后区间就是含义本身）。
@@ -687,7 +665,7 @@ async function frontierRound(goalDims, round, goalTargets = null) {
         await body.goto(lm.x, lm.z, 1.2);
         const gripBefore = st.lastFrame?.grip ?? 0;
         for (let s = 0; s < 6; s++) {
-          await step(frontierAction(['itemDist'], { itemDist: [0, 1] }));
+          await step(approachItemAction());
           if ((st.lastFrame?.itemDist ?? 8) >= 8) break; // 掉落物没了（吸入或消失）就停
         }
         // 扑空核验：没吸入且视野内无掉落物 → 该目击点已空，删除（不再回访——空点反复顶头的实测根因）
@@ -714,9 +692,23 @@ async function frontierRound(goalDims, round, goalTargets = null) {
       }
     } else if (lm) out('[前沿] 地标都在 120m 外，跳过回访');
   }
-  for (let i = 0; i < 40; i++) await step(st.attentionCapture && st.decisions < st.attentionCapture.until
-    ? frontierAction(['itemDist'], { itemDist: [0, 1] })  // 抢占窗内：微目标接近掉落物
-    : frontierAction(goalDims, goalTargets));
+  for (let i = 0; i < 40; i++) await step(attentionActive() ? approachItemAction() : frontierAction(goalDims, goalTargets));
+}
+
+/** 建立目标维的值（证实性探针的"置条件"臂）：去该值真实存在的地方重建情境。
+ * nearType=N → findBlocks 找 32m 内真实方块 + goto + 面向它（真实导航，不传送）。
+ * 不支持的维如实返回 false（不硬撑）。 */
+async function establishDim(dim, v) {
+  if (dim !== 'nearType') return false;
+  const name = Object.entries(BLOCK_IDS).find(([, id]) => id === Math.round(v))?.[0];
+  const id = name ? body.bot.registry.blocksByName[name]?.id : undefined;
+  if (id === undefined) return false;
+  const blk = body.bot.findBlocks({ point: body.bot.entity.position, maxDistance: 32, matching: [id], count: 1 })[0];
+  if (!blk) return false;
+  out(`[实验] 证实性建立：面向 ${name}（${blk.x},${blk.y},${blk.z}）`);
+  await body.goto(blk.x, blk.z, 1.6);
+  await body.lookAt(blk.x + 0.5, blk.y + 0.5, blk.z + 0.5);
+  return true;
 }
 
 /** 缺口→轭式控制变量探针（v3 通用机制，Q5 答复落地）：
@@ -726,13 +718,13 @@ async function frontierRound(goalDims, round, goalTargets = null) {
  * （v2 探针教训：固定 4 变体扰动的是因果维 nearType——效应消失，信息量结构性为零。） */
 async function probeOverSpecific(goalDims, gaps = [], maxProbes = 3) {
   if (!experiments) return 0;
-  const gapKeys = new Set(gaps.map((g) => `${g.action}|${JSON.stringify(g.outcome)}`));
+  const gapKeys = new Set(gaps.map((g) => `${g.action}|${JSON.stringify(g.outcomes)}`));
   const cands = r3.rules
     .filter((r) => goalDims.some((g) => r.outcomes[g] !== undefined))
     .filter((r) => Object.keys(r.soft ?? {}).length || Object.keys(r.untested ?? {}).length)
     .sort((a, b) => {
-      const ga = gapKeys.has(`${a.action}|${JSON.stringify(a.outcome ?? a.outcomes)}`) ? 1 : 0;
-      const gb = gapKeys.has(`${b.action}|${JSON.stringify(b.outcome ?? b.outcomes)}`) ? 1 : 0;
+      const ga = gapKeys.has(`${a.action}|${JSON.stringify(a.outcomes)}`) ? 1 : 0;
+      const gb = gapKeys.has(`${b.action}|${JSON.stringify(b.outcomes)}`) ? 1 : 0;
       return gb - ga || (b.rho ?? 0.5) * Math.log2(2 + (b.n ?? 1)) - (a.rho ?? 0.5) * Math.log2(2 + (a.n ?? 1));
     });
   let done = 0;
@@ -756,13 +748,29 @@ async function probeOverSpecific(goalDims, gaps = [], maxProbes = 3) {
     if (prep.cleanup) try { prep.cleanup(); } catch { /* 刹车失败无碍，下一帧感知如实反映 */ }
     done++;
   }
+  // 证实性臂（与扰动臂互补，双臂对照的两条腿）：挑最弱的目标规则里 conf 居中的 soft 维
+  // （疑似因果带 0.15–0.5），把它在世界中建立出来再执行动作——结果复现则该维 conf 升向 hard。
+  // 挖类动作必须补完"逼近→吸入"尾段，否则挖了不捡 = 给对照臂加反例（实测教训）
+  const confTarget = cands
+    .map((r) => ({ r, top: Object.entries(r.soft ?? {}).sort((a, b) => b[1].conf - a[1].conf)[0] }))
+    .filter((x) => x.top && x.top[1].conf >= 0.15 && x.top[1].conf < 0.5)
+    .sort((a, b) => b.top[1].conf - a.top[1].conf)[0];
+  if (confTarget) {
+    const [d, s] = confTarget.top;
+    out(`[实验] 证实性探针：建立 ${d}=${s.v}（conf ${s.conf}）后执行 ${ACTION_NAMES[confTarget.r.action]}→${JSON.stringify(confTarget.r.outcomes)}`);
+    if (await establishDim(d, s.v).catch(() => false)) {
+      await step(confTarget.r.action);
+      for (let k = 0; k < 3 && (st.lastFrame?.itemDist ?? 8) < 8; k++) await step(frontierAction(['itemDist'], { itemDist: [0, 1] })); // 补完拾取尾段
+      done++;
+    }
+  }
   return done;
 }
 
-/** r123 目标模式：反向链接规划（R3 因素规则）→ 逐节执行核对（捕获）→ 缺规则前沿探索 */
-async function runGoalR123(spec) {
+/** 目标模式（设计第 9 条）：反向链接规划（R3 因素规则）→ 逐节执行核对（捕获）→ 缺规则前沿探索 */
+async function runGoal(spec) {
   const goalDims = Object.keys(spec).filter((d) => DIM_NAMES.includes(d));
-  // 概念未形成 → 朝目标维前沿探索到形成为止（与 legacy 同一策略）
+  // 概念未形成 → 朝目标维前沿探索到形成为止（push the boundary：不报"先探索"就停）
   let goal = null, waits = 0;
   while (!goal && waits < 15) {
     try { goal = resolveGoalSpec(spec); break; }
@@ -781,7 +789,7 @@ async function runGoalR123(spec) {
     }
   }
   if (!goal) {
-    st.goalReport = { error: '前沿探索后目标概念仍未形成', goalDims, frontierWaits: waits, engine: 'r123' };
+    st.goalReport = { error: '前沿探索后目标概念仍未形成', goalDims, frontierWaits: waits };
     out(`目标结果：${JSON.stringify(st.goalReport)}`);
     st.goal = null; st.phase = 'running';
     return;
@@ -808,7 +816,7 @@ async function runGoalR123(spec) {
       out(`[R3] 规划时状态 logGrip 中心=${st.lastCenterState?.logGrip?.toFixed?.(2)}`);
       const changeRules = r3.rules.filter((r) => Object.keys(r.outcomes).length > 0);
       const lgRules = changeRules.filter((r) => r.outcomes.logGrip !== undefined);
-      const fmt = (r) => `${ACTION_NAMES[r.action]}[hard=${Object.entries(r.hard ?? r.factors).map(([d, v]) => `${d}=${typeof v === 'number' ? v.toFixed(1) : v}`).join(',')}${Object.keys(r.soft ?? {}).length ? ` soft=${Object.keys(r.soft).join(',')}` : ''}]→${JSON.stringify(r.outcomes)}(n${r.n ?? '?'} ρ${r.rho ?? '?'})`;
+      const fmt = (r) => `${ACTION_NAMES[r.action]}[hard=${Object.entries(r.hard).map(([d, v]) => `${d}=${typeof v === 'number' ? v.toFixed(1) : v}`).join(',')}${Object.keys(r.soft ?? {}).length ? ` soft=${Object.keys(r.soft).join(',')}` : ''}]→${JSON.stringify(r.outcomes)}(n${r.n ?? '?'} ρ${r.rho ?? '?'})`;
       out(`[R3] 物化规则 ${r3.rules.length}（logGrip 结果规则 ${lgRules.length}：${lgRules.slice(0, 3).map(fmt).join(' | ')}）：${changeRules.slice(0, 10).map(fmt).join(' | ')}${changeRules.length > 10 ? ' …' : ''}`);
     }
     chain = planBackward({ rules: r3.rules, current: st.lastCenterState, goalDims: targets, maxDepth: 6, exclude: failedRules, candidatesFn: (t, f) => r3.planCandidates(f, t, 1 + retries) });
@@ -817,7 +825,7 @@ async function runGoalR123(spec) {
       st.phase = 'goal-frontier';
       // 缺口上报（v3）：点名缺哪条证据——evidence-gap=有规则但因素不满足/证据不足；missing-rule=无规则触及目标维
       if (chain.status === 'evidence-gap') {
-        out(`目标无规划链（证据缺口），前沿探索第 ${retries} 轮：${chain.gaps.slice(0, 3).map((g) => `${ACTION_NAMES[g.action]}→${JSON.stringify(g.outcome)} 缺 hard[${g.missing.map((m) => `${m.dim}=${m.want}`).join(',') || '无'}]`).join(' | ')}`);
+        out(`目标无规划链（证据缺口），前沿探索第 ${retries} 轮：${chain.gaps.slice(0, 3).map((g) => `${ACTION_NAMES[g.action]}→${JSON.stringify(g.outcomes)} 缺 hard[${g.missing.map((m) => `${m.dim}=${m.want}`).join(',') || '无'}]`).join(' | ')}`);
       } else {
         out(`目标无规划链（缺失规则：无任何规则触及 ${chain.need?.join(',') ?? '目标维'}），前沿探索第 ${retries} 轮`);
       }
@@ -831,8 +839,7 @@ async function runGoalR123(spec) {
     if (chain.assumptions?.length) out(`[规划] 软假设 ${chain.assumptions.length} 条（执行即实验）：${chain.assumptions.slice(0, 4).map((a) => `${a.dim}=${a.want}(conf ${a.conf})`).join(' | ')}`);
     broke = null;
     for (const [i, rule] of chain.steps.entries()) {
-      const hard = rule.hard ?? rule.factors;
-      const missing = Object.fromEntries(Object.entries(hard).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
+      const missing = Object.fromEntries(Object.entries(rule.hard).filter(([d, v]) => !closeEnough(st.lastCenterState[d], v)));
       if (Object.keys(missing).length) { broke = { step: i, rule, reason: 'hard 因素不满足', missing }; break; }
       const before = { ...st.lastCenterState };
       await step(rule.action);
@@ -852,7 +859,7 @@ async function runGoalR123(spec) {
       // 没有就纯等待观察（不写 R1）；仍不符才判断裂。
       for (let grace = 0; Object.keys(wrong).length && grace < 3; grace++) {
         if ((st.lastFrame?.itemDist ?? 8) < 8) {
-          await step(frontierAction(['itemDist'], { itemDist: [0, 1] }));
+          await step(approachItemAction());
         } else {
           await new Promise((r) => setTimeout(r, 800));
           st.lastCenterState = resolveFrameCenter(perceive());
@@ -878,59 +885,8 @@ async function runGoalR123(spec) {
   const reached = !broke && chain?.status === 'found' && Object.entries(targets).every(([d, v]) => satTarget(d, v));
   st.goalReport = {
     targets, reached, chainLen: chain?.steps?.length ?? 0, via: chain?.via ?? (chain?.steps?.length ? 'chain' : 'none'),
-    broke, frontierRetries: retries, engine: 'r123',
+    broke, frontierRetries: retries,
     ...(chain?.status === 'found' ? {} : { terminationReason: chain?.status, gaps: chain?.gaps ?? chain?.need }),
-  };
-  out(`目标结果：${JSON.stringify(st.goalReport)}`);
-  st.goal = null;
-  st.phase = 'running';
-}
-
-async function runGoal(spec) {
-  if (ENGINE === 'r123') return runGoalR123(spec); // 新架构：R1→R2→R3→反向链接
-  const goalDims = Object.keys(spec).filter((d) => DIM_NAMES.includes(d));
-  // 概念未形成 → 朝目标维前沿探索到形成为止（push the boundary：不报"先探索"就停）
-  let goal = null, waits = 0;
-  while (!goal && waits < 15) {
-    try { goal = resolveGoalSpec(spec); break; }
-    catch (e) {
-      if (waits === 0) out(`目标的概念尚未形成（${e.message}）——开始朝目标维主动探索`);
-      st.phase = 'goal-frontier';
-      // 地标回访：概念没形成时，回到见过稀罕东西的地方探（"原木曾出没于树柱那边"），
-      // 而不是在原地瞎挖——空间盲的前沿探索证明过是徒劳的
-      const lmList = [...landmarks.values()];
-      if (lmList.length) {
-        const lm = lmList[Math.floor(rng() * lmList.length)];
-        out(`[前沿] 回访地标 (${lm.x.toFixed(1)},${lm.z.toFixed(1)})`);
-        await body.lookAt(lm.x, -59.5, lm.z);
-        await body.goto(lm.x, lm.z, 2.0);
-      }
-      for (let i = 0; i < 40; i++) await step(frontierAction(goalDims, targets));
-      waits++;
-    }
-  }
-  if (!goal) {
-    st.goalReport = { error: '前沿探索后目标概念仍未形成', goalDims, frontierWaits: waits };
-    out(`目标结果：${JSON.stringify(st.goalReport)}`);
-    st.goal = null; st.phase = 'running';
-    return;
-  }
-  const cur = st.lastCState;
-  out(`目标：${JSON.stringify(goal)}（当前 ${JSON.stringify(cur)}，可读 ${JSON.stringify(cStateReadable(goal))}）`);
-  let exec = await executeGoal(mem, embodiedBench, cur, goal, 1, { planFn: planGoalAsync });
-  let retries = 0;
-  // 无路线 → 目标前沿探索（push the boundary：攒规则再攻，不报做不到），有界重试
-  while (!exec.reached && exec.plans[0]?.status !== 'found' && retries < 10) {
-    retries++;
-    st.phase = 'goal-frontier';
-    out(`目标无路线，前沿探索第 ${retries} 轮（40 决策攒规则后重试规划）`);
-    await frontierRound(goalDims, retries, targets);
-    exec = await executeGoal(mem, embodiedBench, st.lastCState, goal, 1, { planFn: planGoalAsync });
-  }
-  st.goalReport = {
-    goal, goalReadable: cStateReadable(goal), reached: exec.reached, terminationReason: exec.terminationReason,
-    planStatus: exec.plans.at(-1)?.status, planSteps: exec.plans.at(-1)?.steps.length,
-    executed: exec.steps.length, replans: exec.replans.length, frontierRetries: retries,
   };
   out(`目标结果：${JSON.stringify(st.goalReport)}`);
   st.goal = null;
@@ -947,36 +903,28 @@ async function verifyLearning(k = 40) {
   for (let i = 0; i < k; i++) {
     const frame = perceive();
     formation.presentExperiment(frame, 4);
-    const cState = ENGINE === 'r123' ? resolveFrameCenter(frame) : resolveFrame(frame); // r123 全程中心值态
+    const cState = resolveFrameCenter(frame); // 全程中心值态（R3 语义）
     const idx = exploreAction();
-    const action = actionOf(idx);
-    let pred;
-    if (ENGINE === 'r123') { // R3 预测（反转点火门：满足因素即可答）；预测下一帧 = 当前帧+规则结果
-      const p3 = r3.predict(cState, idx, (1000 + i) >>> 0);
-      pred = p3.kind === 'usable'
-        ? { kind: 'usable', next: Object.fromEntries(DIM_NAMES.map((d) => [d, p3.outcomes[d] ?? cState[d]])) }
-        : { kind: p3.kind };
-    } else {
-      pred = mem.predict(cState, action, (1000 + i) >>> 0); // legacy 样本登记预测（A/B 对照）
-    }
+    // R3 预测（反转点火门：满足因素即可答）；预测下一帧 = 当前帧 + 规则结果 Δ/新值
+    const p3 = r3.predict(cState, idx, (1000 + i) >>> 0);
+    const pred = p3.kind === 'usable'
+      ? { kind: 'usable', next: Object.fromEntries(DIM_NAMES.map((d) => [d, p3.outcomes[d] !== undefined ? applyChange(d, cState[d], p3.outcomes[d]) : cState[d]])) }
+      : { kind: p3.kind };
     await body.act(ACTION_NAMES[idx]);
     const next = perceive();
     formation.presentExperiment(next, 4);
-    const cNext = ENGINE === 'r123' ? resolveFrameCenter(next) : resolveFrame(next);
+    const cNext = resolveFrameCenter(next);
     // 自己的行动也继续学（与 step() 同一登记路径：R1 只记变化维 + 裸值帧）
     const changed = {};
     for (const d of DIM_NAMES) if (cNext[d] !== cState[d]) changed[d] = cNext[d];
     r1.record(cState, idx, changed, frame, next);
-    if (ENGINE === 'legacy') mem.observe(cState, action, outcomesOf(cNext));
     st.writes++; st.decisions++;
-    if (st.decisions % 50 === 0) { registry.refresh(formation.extractConcepts(0.5)); retina.refreshWells(); rebuildR3(); st.concepts = registry.all().length; }
+    if (st.decisions % 50 === 0) periodicRebuild();
     if (pred.kind !== 'usable' || !pred.next) continue;
     usable++;
     for (const d of DIM_NAMES) {
       perDimN[d]++; tot++;
-      // 中心值态按容差比对（0.6）；索引态按精确（legacy 路径）
-      const ok = ENGINE === 'r123' ? Math.abs(pred.next[d] - cNext[d]) <= 0.6 : pred.next[d] === cNext[d];
-      if (ok) { perDimHit[d]++; hit++; }
+      if (Math.abs(pred.next[d] - cNext[d]) <= 0.6) { perDimHit[d]++; hit++; } // 中心值态按容差比对（0.6）
     }
   }
   return {
@@ -991,10 +939,7 @@ async function runLevelsProtocol(level4) {
   const report = { mode: level4 ? 'L4（教师未教拾取，缺失规则待自探）' : 'L1-L3', startedAt: new Date().toISOString() };
   // ── L1：教师接管身体，原型只观察学习 ──
   await runCurriculum();
-  registry.refresh(formation.extractConcepts(0.5));
-  retina.refreshWells();
-  rebuildR3(); // 课程经验差分结果物化进 R3（目标模式前必须有规则）
-  st.concepts = registry.all().length;
+  periodicRebuild(); // 课程经验差分结果物化进 R3（目标模式前必须有规则）
   const labeled = retina.stable.filter((w) => w.label && w.label !== '看-未知');
   report.L1 = {
     wells: retina.wellSummary(), labeledWells: labeled.length, concepts: st.concepts, rules: st.rules,
@@ -1013,7 +958,7 @@ async function runLevelsProtocol(level4) {
   report[key] = { goal: { logGrip: { gte: 1 } }, note: level4 ? '检查目标引导下能否自探出缺失的拾取规则' : '所需规则全部在课程演示过' };
   out(`[${key}] 目标：拿到一块原木（logGrip≥1）`);
   // 目标非平凡化：开局前把课上捡到手的原木放回世界（保证开局 logGrip=0，目标必须真做，
-  // 否则 executeGoal 第一步就判已达成，验收空转）
+  // 否则目标达成短路第一步就判已达成，验收空转）
   let clears = 0;
   for (;;) { // 丢弃原木 stacks（Q 键抛出成掉落物）：放置会被首格拴绳卡死，toss 无视首格顺序
     const logs = body.bot.inventory.items().filter((i) => i.name === 'oak_log');
@@ -1022,6 +967,10 @@ async function runLevelsProtocol(level4) {
     clears++;
     const p = body.bot.entity.position;
     markSighting(4, p.x, p.z); // 丢弃点进目击地标：自己丢的原木就躺在那——自传体记忆（非作弊：丢是原型自己的动作）
+    await new Promise((r) => setTimeout(r, 1200)); // 等实体落地
+    const p2 = body.bot.entity.position;
+    const vis = Object.values(body.bot.entities).filter((e) => e.displayName === 'Item' && e.position.distanceTo(p2) < 12);
+    out(`[${key}] 丢弃点 (${p.x.toFixed(1)},${p.z.toFixed(1)}) 落地后视野内掉落物 ${vis.length} 个（最近 ${vis[0] ? vis[0].position.distanceTo(p2).toFixed(1) + 'm' : '无'}）`); // 插桩：掉落物到底在不在
     await body.goto(p.x + 12, p.z, 1.5); // 丢完立刻远离 12m：走出重吸半径（边走边吸回、8 批仍剩 1 的根因）
     await step(7); // 刷新帧读裸值
   }
@@ -1098,16 +1047,15 @@ async function main() {
   enc = new SensoryEncoder(SENSORY_DIMS, 25);
   formation = new ConceptFormation(enc);
   registry = new StableConceptRegistry(enc, CONCEPT_CAPS);
-  mem = new TransitionMemory(CONCEPT_SPACE);
   retina = new RetinaStream({}); // 视觉流：独立概念网络（64 格×12 感受野=768 神经元），viewWell 低位输出进主层
   if (NetClass) { // 脉冲基质：换两个概念网络的底座（语义等价，结构不动）
     formation.net = new NetClass({ neuronCount: enc.neuronCount, activationEnergy: 1.0, maintenanceEnergy: 0.5, learningRate: 0.1, maxWeight: 3.0 });
     retina.formation.net = new NetClass({ neuronCount: retina.enc.neuronCount, activationEnergy: 1.0, maintenanceEnergy: 0.5, learningRate: 0.1, maxWeight: 3.0 });
     out(`[系统] 网络基质：脉冲载体（SpikingEnergyNetwork，语义与二值逐位等价）`);
   }
-  // R1/R2A/R2B/R3：经验→差分→因素规则（默认引擎；样本登记架构降级为 A/B 对照）
+  // R1/R2A/R2B/R3：经验 → 差分 → 因素规则（物化进能量网络）
   r1 = new EpisodeBuffer({ capacity: 4000, persistPath: EPISODES });
-  r2 = new DifferentialExtractor({ quorum: 3 });
+  r2 = new DifferentialExtractor();
   r3 = new FactorRuleNet(CONCEPT_CAPS, ACTION_NAMES.length);
   // 主动控制变量实验调度器：空转分支 + 目标缺口探针共用（--levels 也需要它做轭式探针，
   // 必须在 levels 分支 return 之前实例化——此前探针在验收跑里根本不存在，复审实证）
@@ -1131,7 +1079,7 @@ async function main() {
   await connect();
   initSpatial(); // 空间层：罗盘环点燃 + 路径积分归零 + 环位对齐初始 yaw
   st.phase = 'running';
-  out(`[系统] 连续流启动：概念空间 ${CONCEPT_SPACE.states.map((d) => `${d.name}=${d.bins}档`).join(' ')}`);
+  out(`[系统] 连续流启动：概念空间 ${DIM_NAMES.map((d) => `${d}=${CONCEPT_CAPS[d] + 1}档`).join(' ')}`);
   for (;;) {
     if (st.paused) { st.phase = 'paused'; await new Promise((r) => setTimeout(r, 1000)); continue; }
     try {
@@ -1143,20 +1091,10 @@ async function main() {
         continue;
       }
       const t0 = performance.now();
-      // 抢占注意力优先于随机探索：掉落物在抢占窗内 → 微目标"接近它"（自适应偏好打分驱动）
-      if (st.attentionCapture && st.decisions < st.attentionCapture.until) {
-        await step(frontierAction(['itemDist'], { itemDist: [0, 1] }));
-      } else {
-        await step(exploreAction());
-      }
+      // 抢占注意力优先于随机探索：掉落物在抢占窗内 → 微目标"接近它"（规则打分驱动）
+      await step(attentionActive() ? approachItemAction() : exploreAction()); // 概念注册表/R3 的周期物化在 step 内（每 50 决策）
       if (st.frames % 20 === 0) out(`[节奏] step ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-      if (st.frames % 100 === 0) {
-        registry.refresh(formation.extractConcepts(0.5));
-        retina.refreshWells(); // 视觉井也周期重检（标签随成员重叠继承，槽位稳定）
-        rebuildR3(); // R3 因素规则网周期物化（R2 差分结果 → 网络）
-        st.concepts = registry.all().length;
-        out(`[概念] ${st.frames} 帧，注册表 ${st.concepts} 个概念（稳定索引），视觉井 ${retina.stable.length}，R3规则 ${r3.rules.length}`);
-      }
+      if (st.frames % 100 === 0) out(`[概念] ${st.frames} 帧，注册表 ${st.concepts} 个概念（稳定索引），视觉井 ${retina.stable.length}，R3规则 ${r3.rules.length}`);
       if (experiments) await experiments.maybeRun(); // 控制变量实验（内部自节流：每 20 决策一次，无目标非教师期才动手）
       st.frames++;
     } catch (e) {

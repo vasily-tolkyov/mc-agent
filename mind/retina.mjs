@@ -225,9 +225,7 @@ export class RetinaStream {
     return { value: r.stableIndex ?? this.maxWells, recognition: r };
   }
 
-  /** 兼容 mind-agent 的周期调用点：井是 append-only 吸引子快照，无需重检；留作统计刷新 */
-  refreshWells() {}
-
+  /** 井是 append-only 吸引子快照（索引即稳定槽位），不做周期重检 */
   get stable() { return this.wells; } // mind-agent labelOf 读取 .stable[i].label
 
   /** 稀罕度报表（调参透明化）：材质值 → 文档频率 */

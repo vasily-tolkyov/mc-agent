@@ -1,5 +1,5 @@
 /** 用生产 body.mjs 的 goto 直接测（第三个账号，避开 ProtoAgent/SmokeBot 冲突）。 */
-import { createBody } from './mind/body.mjs';
+import { createBody } from '../mind/body.mjs';
 
 const body = createBody({ username: 'ProbeBot' });
 await body.ready;

@@ -1,10 +1,12 @@
-/** A/B 测速探针：建引擎 → 10 集预测计时（定位 verify-ab 卡死环节）。 */
+/** A/B 测速探针：建引擎 → 10 集预测计时（定位 verify-ab 卡死环节）。
+ * 对照引擎 = energy-network-sim 的样本登记 TransitionMemory（已从 mind-agent 移除，只在 A/B 里作历史对照）。
+ * 运行（仓库根）：node probes/probe-ab-speed.mjs */
 import fs from 'node:fs';
-import { EpisodeBuffer } from './mind/r1-episodes.mjs';
-import { DifferentialExtractor } from './mind/r2-diff.mjs';
-import { FactorRuleNet } from './mind/r3-rules.mjs';
+import { EpisodeBuffer } from '../mind/r1-episodes.mjs';
+import { DifferentialExtractor } from '../mind/r2-diff.mjs';
+import { FactorRuleNet } from '../mind/r3-rules.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
+const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
 const { TransitionMemory } = await imp('dist/src/planning/transition-memory.js');
 const CONCEPT_CAPS = { nearDist: 8, nearType: 13, belowType: 13, grip: 8, logGrip: 8, speed: 8, onGround: 2, viewWell: 14, itemDist: 9, itemType: 13, itemBearing: 9 };
@@ -17,7 +19,7 @@ const cut = Math.floor(episodes.length * 0.8);
 const train = episodes.slice(0, cut);
 console.log(' episodes', episodes.length, 'train', train.length);
 let t = performance.now();
-const r1 = new EpisodeBuffer({}); const r2 = new DifferentialExtractor({ quorum: 3 });
+const r1 = new EpisodeBuffer({}); const r2 = new DifferentialExtractor();
 for (const ep of train) { r1.record(ep.conditions, ep.act, ep.outcomes); }
 for (const ep of r1.recent()) r2.ingest(ep);
 console.log('r2 diff', (performance.now() - t).toFixed(0), 'ms,', r2.allRules().length, 'rules');
@@ -25,7 +27,7 @@ const r3 = new FactorRuleNet(CONCEPT_CAPS, 10);
 const alt = new Map();
 for (const ep of train) for (const [d, v] of Object.entries(ep.conditions)) { if (!alt.has(d)) alt.set(d, new Set()); alt.get(d).add(v); }
 t = performance.now();
-r3.rebuild(r2.allRules().filter((r) => Object.keys(r.factors).length > 0 && r.support >= 2), alt);
+r3.rebuild(r2.allRules(), alt);
 console.log('r3 rebuild', (performance.now() - t).toFixed(0), 'ms,', r3.rules.length, 'rules,', r3.net.neuronCount, 'neurons');
 t = performance.now();
 const SPACE = { states: DIMS.map((name) => ({ name, outcome: 'next' + name[0].toUpperCase() + name.slice(1), bins: CONCEPT_CAPS[name] + 1 })), actions: [{ name: 'act', bins: 10 }], diameter: 14 };

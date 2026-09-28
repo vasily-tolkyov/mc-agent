@@ -1,10 +1,10 @@
 /** 拾取探针 v3：重建场地 → 挖原木 → 看着掉落物用 'back' 接近 → 验证吸入。 */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { createBody } from './mind/body.mjs';
-import { raycastForward } from './mind/sensory.mjs';
+import { createBody } from '../mind/body.mjs';
+import { raycastForward } from '../mind/sensory.mjs';
 
-execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))), 'build-flat-map.cjs')], { stdio: 'inherit' });
+execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))), '..', 'build-flat-map.cjs')], { stdio: 'inherit' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const body = createBody({ username: `PK${Date.now() % 100000}` });
 await body.ready;

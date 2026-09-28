@@ -64,4 +64,7 @@ for (let k = 0; k < 20; k++) {
 const l1 = bin.ledger(), l2 = spk.ledger();
 console.log(`runStep 账本：${JSON.stringify(l1)} vs ${JSON.stringify(l2)} → ${l1.activationCost === l2.activationCost && l1.maintenanceCost === l2.maintenanceCost && l1.activationCount === l2.activationCount ? '一致' : '✗ 不一致'}`);
 console.log(`载体层：${spk.spikeLog.length} 条脉冲事件（容量 ${spk.spikeLogCap}），断言全程无异常`);
-console.log(sameSet && sameEnergy && sameTrace && edgeDiff === 0 && wDiff === 0 ? '\n✓ 脉冲载体 ≡ 二值语义（逐位）' : '\n✗ 存在差异');
+const ledgerSame = l1.activationCost === l2.activationCost && l1.maintenanceCost === l2.maintenanceCost && l1.activationCount === l2.activationCount;
+const ok = sameSet && sameEnergy && sameTrace && edgeDiff === 0 && wDiff === 0 && ledgerSame;
+console.log(ok ? '\n✓ 脉冲载体 ≡ 二值语义（逐位）' : '\n✗ 存在差异');
+process.exit(ok ? 0 : 1);

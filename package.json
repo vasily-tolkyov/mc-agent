@@ -1,14 +1,13 @@
 {
   "name": "mc-agent",
-  "version": "2.0.0",
-  "description": "Local Minecraft client display with the pinned Kairos experience runtime",
-  "main": "local-agent.mjs",
+  "version": "3.0.0",
+  "description": "Minecraft embodied agent driven by a multi-layer simulated neural network (energy-network-sim substrate): concept self-formation, R1/R2/R3 experience-to-rule layers, backward-chaining planner",
+  "main": "mind-agent.mjs",
   "scripts": {
-    "start": "node local-agent.mjs",
-    "check": "node local-agent.mjs --check",
-    "build:core": "npm --prefix ../kairos-v5-predictive-agent run build && node scripts/core-build-lock.mjs --record",
-    "test": "node --test test/*.test.mjs",
-    "test:core": "npm --prefix ../kairos-v5-predictive-agent run test:next-stage",
+    "start": "node mind-agent.mjs",
+    "levels": "node mind-agent.mjs --levels",
+    "verify": "node verify-r123.mjs && node verify-r2-replay.mjs && node verify-space.mjs && node verify-spiking-equiv.mjs && node verify-spiking-anneal.mjs && node verify-spiking-structures.mjs",
+    "test": "npm run verify",
     "server:start": "node scripts/local-server.mjs start",
     "server:stop": "node scripts/local-server.mjs stop",
     "server:status": "node scripts/local-server.mjs status",
@@ -16,7 +15,7 @@
     "proxy:stop": "node scripts/local-proxy.mjs stop",
     "doctor": "node scripts/local-doctor.mjs",
     "observe": "node scripts/local-server.mjs observe",
-    "instruct": "node send-instruction.cjs"
+    "flat-map": "node build-flat-map.cjs"
   },
   "keywords": [],
   "author": "",

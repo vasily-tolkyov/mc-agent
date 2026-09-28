@@ -3,3 +3,8 @@ runs/
 .local-minecraft/
 *.log
 viaproxy/logs/
+# ViaProxy 运行态（随进程重生，不入库）
+viaproxy/supervisor.json
+viaproxy/supervisor.lock
+viaproxy/saves.json
+viaproxy/viabedrock/

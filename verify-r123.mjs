@@ -68,18 +68,18 @@ for (let i = 0; i < 2; i++) {
   logGrip += 2; grip += 2;
 }
 
-const r2 = new DifferentialExtractor({});
+const r2 = new DifferentialExtractor();
 r2.ingestAll(r1.recent());
 const rules = r2.allRules();
 console.log(`── R2 v3 差分（${r1.size} 情节 → ${rules.length} 规则）──`);
-const lgRules = rules.filter((r) => r.outcome.logGrip === 1 && r.action === DIG);
+const lgRules = rules.filter((r) => r.outcomes.logGrip === 1 && r.action === DIG);
 for (const r of lgRules) console.log(`  dig→logGrip Δ+1：hard=${JSON.stringify(r.hard)} soft=${JSON.stringify(Object.fromEntries(Object.entries(r.soft).map(([d, s]) => [d, s.conf])))} n=${r.n} ρ=${r.rho}`);
 const lg = lgRules[0];
 const t1 = lg && lg.n >= 12 && Object.keys(lg.hard).length > 0 && Object.keys(lg.hard).length <= 2
   && (lg.hard.nearType === OAK || lg.hard.nearDist !== undefined);
 console.log(`① 双臂对照剔薄：hard 因素 ${lg ? Object.keys(lg.hard).length : '-'} 个（要求 1–2 且含 nearType/nearDist，n≥12）→ ${t1 ? '✓' : '✗'}`);
 // 反面：挖石头规则不该把 logGrip 当结果
-const bad = rules.some((r) => r.action === DIG && r.outcome.logGrip !== undefined && r.hard.nearType === STONE);
+const bad = rules.some((r) => r.action === DIG && r.outcomes.logGrip !== undefined && r.hard.nearType === STONE);
 console.log(`② 对照臂生效：无"挖石头→logGrip"伪规则 → ${!bad ? '✓' : '✗'}`);
 
 // R3 物化 + 泛化预测

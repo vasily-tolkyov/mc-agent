@@ -11,7 +11,7 @@
  * 读出 = 规划链的"反查"接口：钳置查询帧 → 退火 → 获胜核 → 读其规则的因素与结果。
  */
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { kindOf } from './r2-diff.mjs';
+import { kindOf, factorValues } from './r2-diff.mjs';
 
 const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
 const imp = (p) => import(pathToFileURL(`${ENS}/${p}`).href);
@@ -63,19 +63,21 @@ export class FactorRuleNet {
       // 因素场 → 核：w_d = W_tot·conf_d/|F|——按因素数归一化（宽规则不再天然更深），
       // 但保留 conf 作权重：强 hard 因素的规则 > 弱 soft 因素的规则（特异性决胜），
       // 实测教训：conf/Σconf 归一化把置信差异抹平，grip 噪声规则反超 logGrip 真规则
-      // 证据深度（赫布本义：连接强度 ∝ 共现证据）：E=n·ρ（证据数×复现率下界）。
-      // 侥幸模式（n=2, ρ=0.005 → E≈0.01）的连接弱到物理上点不燃一个 4 神经元核
+      // 证据深度（赫布本义：连接强度 ∝ 共现证据）：E=support·ρ（效价加权证据×复现率下界）。
+      // support = Σ效价权重（设计第 8 条"重要事件单次顶多次"——多巴胺广播的记账版；
+      // 滞后归因的衰减副本 ×0.5/×0.25 也在这里如实少算，此前用裸计数 n 把两者都抹平了）。
+      // 侥幸模式（support=2, ρ=0.005 → E≈0.01）的连接弱到物理上点不燃一个 4 神经元核
       // （驱动 ≪ θ=Ea+Em=1.5）——"反复出现才成规则"由地形深度自然带来，不是计数闸门。
-      const evN = (rule.n ?? 1) * (rule.rho ?? 0.5);
-      const depth = 0.12 + 0.88 * Math.min(1, evN / 2.5);
-      const W_tot = Math.min(2.5, 0.8 + 0.15 * Math.log2(1 + (rule.n ?? rule.support))) * depth;
-      const factorEntries = Object.entries(rule.factors);
+      const evidence = rule.support ?? rule.n ?? 1;
+      const depth = 0.12 + 0.88 * Math.min(1, (evidence * (rule.rho ?? 0.5)) / 2.5);
+      const W_tot = Math.min(2.5, 0.8 + 0.15 * Math.log2(1 + evidence)) * depth;
+      const factorEntries = Object.entries(factorValues(rule));
       const nF = Math.max(1, factorEntries.length);
       for (const [dim, v] of factorEntries) {
         const wd = W_tot * (rule.conf?.[dim] ?? 0.3) / nF;
         for (const f of this.enc.encodeDimension(dim, v)) for (const c of core) this.net.setWeight(f, c, wd);
         // 否决 Γ 只挂 hard 维（soft 维证据不足，压下整条规则太狠）
-        if (rule.hard && rule.hard[dim] === undefined) continue;
+        if (rule.hard[dim] === undefined) continue;
         for (const alt of altValues.get(dim) ?? []) {
           if (Math.abs(alt - v) <= 0.5) continue;
           for (const f of this.enc.encodeDimension(dim, alt)) for (const c of core) this.net.strengthenInhibitory(f, c, 1.2);
@@ -83,7 +85,7 @@ export class FactorRuleNet {
       }
       // 动作场 → 核（参赛条件；同样乘证据深度——无 hard 因素的侥幸规则唯一的驱动来源
       // 就是动作边，不乘深度它会在任何该动作的查询里点燃，实测垃圾规则躺赢退火的根因）
-      const wAct = 0.4 * (1 + 0.15 * Math.log2(1 + (rule.n ?? rule.support))) * depth;
+      const wAct = 0.4 * (1 + 0.15 * Math.log2(1 + evidence)) * depth;
       for (const f of this.enc.encodeDimension('act', rule.action)) for (const c of core) this.net.setWeight(f, c, wAct);
       // 核 → 结果场（星型；序数/方位维写 Δ 档（v+4 ∈ 0..8），类别维写新值——Δ 语义见 r2-diff v3；
       // 结果边也乘深度：核侥幸点燃时结果场也不该亮，读出层就压得住）
@@ -102,24 +104,37 @@ export class FactorRuleNet {
     this.refreshCount++;
   }
 
+  /** 反转点火门（结构读取，不退火）：规则 hard 因素维中，在查询场里有 W 边支持核的比例。
+   * 满足影响因素即可参赛，不论其余情境（规则泛化定义）；hard 为空 = 无先决条件，恒有资格。 */
+  gateRatio(rule, query) {
+    const dims = Object.keys(rule.hard);
+    if (!dims.length) return 1;
+    let sat = 0;
+    for (const dim of dims) {
+      if (this.enc.encodeDimension(dim, query[dim]).some((f) => rule.core.some((c) => this.net.getWeight(f, c) > 0))) sat++;
+    }
+    return sat / dims.length;
+  }
+
+  /** 共变档案读出（v3 单结果维簇的配套）：获胜核的 co 副作用只在"该副作用自己的规则
+   * （同动作、同 Δ）也通过了本次查询的点火门"时并入——否则挖石头会把原木簇里学到的
+   * "logGrip 也 +1"漏进石头情境（verify-spiking-structures 的石头查询此前就误报 logGrip:1）。 */
+  mergeCo(winner, gated) {
+    const merged = { ...winner.outcomes };
+    for (const [h, c] of Object.entries(winner.co ?? {})) {
+      if (merged[h] !== undefined) continue;
+      if (gated.some((r) => r !== winner && r.action === winner.action && r.outcomes[h] === c.delta)) merged[h] = c.delta;
+    }
+    return merged;
+  }
+
   /** 反查预测：查询帧(全维概念索引)+动作 → 获胜规则与读出。门反转：核的每个条件维须在查询中有支持。 */
   predict(query, action, seed = 1) {
     if (!this.net || !this.rules.length) return { kind: 'empty', rule: null, outcomes: null, energy: 0, converged: true };
     const input = [...this.enc.encode(query), ...this.enc.encodeDimension('act', action)];
-    // 反转点火门：核的每个因素维，都要在查询场里有 W 支持（满足影响因素即可，不论其余情境）
     // 两级制：全满足=严格；≥0.75=近似（冷启动期因素集还很宽——少量经验里"恒定"的维很多，
-    // 严格门会全灭（实测 L2 敢答率 0），近似层如实标注不装无知，与 FieldRuleMemory 稀疏回退同一家族）
-    const scored = [];
-    for (const rule of this.rules) {
-      // 反转点火门只数 hard 维（v3：soft 是证据不足的线索，不做参赛资格；hard 为空 = 无先决条件，恒有资格）
-      const dims = Object.keys(rule.hard ?? rule.factors);
-      let sat = 0;
-      for (const dim of dims) {
-        const has = this.enc.encodeDimension(dim, query[dim]).some((f) => rule.core.some((c) => this.net.getWeight(f, c) > 0));
-        if (has) sat++;
-      }
-      scored.push({ rule, ratio: dims.length === 0 ? 1 : sat / dims.length });
-    }
+    // 严格门会全灭（实测 L2 敢答率 0），近似层如实标注 approximate，不装无知）
+    const scored = this.rules.map((rule) => ({ rule, ratio: this.gateRatio(rule, query) }));
     let pool = scored.filter((s) => s.ratio >= 1);
     let approximate = false;
     if (!pool.length) {
@@ -149,10 +164,9 @@ export class FactorRuleNet {
     }
     if (!winner || bestOn < 3) return { kind: 'ambiguous', rule: null, outcomes: null, energy: result.energy, converged: result.converged, approximate };
     // 共变档案合并读出（v3）：挖原木时 logGrip/grip 一起变——它们是两条等深规则，
-    // 退火任选一个核都合法，读出时把 freq≥0.5 的共变 Δ 并入结果（双峰一致读出）
-    const merged = { ...winner.outcomes };
-    for (const [h, c] of Object.entries(winner.co ?? {})) if (merged[h] === undefined) merged[h] = c.delta;
-    return { kind: 'usable', rule: winner, outcomes: merged, energy: result.energy, converged: result.converged, terminationReason: result.terminationReason, approximate };
+    // 退火任选一个核都合法（WTA 池只留一个胜者），读出时把共变 Δ 并入结果——但只并入
+    // 本次查询也点火合格的规则（mergeCo），不让别的情境学到的副作用漏进来
+    return { kind: 'usable', rule: winner, outcomes: this.mergeCo(winner, supported), energy: result.energy, converged: result.converged, terminationReason: result.terminationReason, approximate };
   }
 
   /** 规划候选的退火读出（机制本义：候选由地形浮出，不由符号数组过滤）：
@@ -187,11 +201,13 @@ export class FactorRuleNet {
     }
     if (!goalClamps.length) return [];
     const input = [...this.enc.encode(query), ...goalClamps];
-    // 反转门：hard 因素在查询中有支持（与 predict 同一语义）
-    const gated = this.rules.filter((rule) => {
-      const dims = Object.keys(rule.hard ?? rule.factors);
-      return dims.every((dim) => this.enc.encodeDimension(dim, query[dim]).some((f) => rule.core.some((c) => this.net.getWeight(f, c) > 0)));
-    });
+    // 规划不设因素门（与 predict 相反）：hard 不满足正是要递归成子目标的——设门会把
+    // "因素未满足的真规则"挡在候选外，反向链接永远拼不出第一节（实测：ρ=0.68 的
+    // forward→logGrip 规则因 hard 缺 viewWell/itemType 被门杀，链全灭的根因）。
+    // 侥幸抑制由证据深度承担（浅井点不燃）；共变合并仍按门过滤（mergeCo 的门义是
+    // "副作用自己的规则在本查询成立"，与候选资格不冲突）。
+    const gatePassed = this.rules.filter((rule) => this.gateRatio(rule, query) >= 1);
+    const gated = this.rules;
     if (!gated.length) return [];
     const result = this.net.settleAnnealed(input, [], {
       seed,
@@ -206,11 +222,7 @@ export class FactorRuleNet {
     return gated
       .map((r) => ({ rule: r, on: r.core.filter((c) => active.has(c)).length }))
       .filter((x) => x.on >= 3)
-      .map((x) => {
-        const merged = { ...x.rule.outcomes };
-        for (const [h, c] of Object.entries(x.rule.co ?? {})) if (merged[h] === undefined) merged[h] = c.delta;
-        return { ...x.rule, outcomes: merged };
-      })
+      .map((x) => ({ ...x.rule, outcomes: this.mergeCo(x.rule, gatePassed) }))
       .sort((a, b) => (b.rho ?? 0.5) * Math.log2(2 + (b.n ?? 1)) - (a.rho ?? 0.5) * Math.log2(2 + (a.n ?? 1)));
   }
 
@@ -220,7 +232,7 @@ export class FactorRuleNet {
    * 中心值语义 + 三态因素（v3）：hard 维缺一即出局（ratio=0）；soft 维计入满足率。 */
   matchRules(query, action) {
     return this.rules.filter((r) => r.action === action).map((r) => {
-      const hard = Object.entries(r.hard ?? r.factors);
+      const hard = Object.entries(r.hard);
       const soft = Object.entries(r.soft ?? {});
       const sat = (v) => (x) => Number.isFinite(x) && Math.abs(x - v) <= 0.6;
       if (!hard.every(([d, v]) => sat(v)(query[d]))) return { rule: r, ratio: 0, support: r.support };

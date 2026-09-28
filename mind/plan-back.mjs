@@ -14,7 +14,7 @@
  *   点名缺哪条证据）或 missing-rule（无规则触及目标维——L4 情形，给前沿探索指路）。
  * 环检测路径局部（当前递归栈上判环，回溯即移除——全局 visited 误剪替代路径的教训）。
  */
-import { kindOf } from './r2-diff.mjs';
+import { kindOf, applyChange } from './r2-diff.mjs';
 
 const TOL = 0.6; // 中心值容差：编码分辨率级
 const sat1 = (frameVal, want) => {
@@ -40,22 +40,20 @@ const outcomeHits = (r, d, frameVal, want) => {
   return distTo(frameVal + out, want) < distTo(frameVal, want);
 };
 
-/** 应用一条规则：结果 Δ/新值 + 共变档案副作用（freq≥0.5） */
+/** 应用一条规则：结果 Δ/新值 + 共变档案副作用（Δ 语义只在 r2-diff.applyChange 一处定义）。
+ * 退火候选（planCandidates）返回的 outcomes 已并入通过点火门的共变维——这些维不再按 co 重复施加
+ * （此前 outcomes 与 co 各施加一次，仿真里 grip 会 +2）。 */
 const applyRule = (r, frame) => {
   const s = { ...frame };
-  const apply1 = (d, delta) => {
-    if (kindOf(d) === 'cat') { s[d] = delta; return; }
-    if (Number.isFinite(s[d])) s[d] = s[d] + delta;
-  };
-  for (const [d, out] of Object.entries(r.outcomes)) apply1(d, out);
-  for (const [h, c] of Object.entries(r.co ?? {})) apply1(h, c.delta);
+  for (const [d, out] of Object.entries(r.outcomes)) s[d] = applyChange(d, s[d], out);
+  for (const [h, c] of Object.entries(r.co ?? {})) if (r.outcomes[h] === undefined) s[h] = applyChange(h, s[h], c.delta);
   return s;
 };
 const applyChain = (chain, frame) => chain.reduce((s, r) => applyRule(r, s), frame);
 
-/** 规则的证据强度（排序用）：ρ × log(2+n)，兼容旧形态规则 */
-const ruleScore = (r) => (r.rho ?? 0.5) * Math.log2(2 + (r.n ?? r.support ?? 1));
-const hardOf = (r) => r.hard ?? r.factors ?? {};
+/** 规则的证据强度（排序用）：ρ × log(2+n) */
+const ruleScore = (r) => (r.rho ?? 0.5) * Math.log2(2 + (r.n ?? 1));
+const hardOf = (r) => r.hard ?? {};
 const softOf = (r) => r.soft ?? {};
 const hardSat = (r, frame) => Object.entries(hardOf(r)).every(([d, v]) => sat1(frame[d], v));
 
@@ -83,7 +81,7 @@ export function planBackward({ rules, current, goalDims, maxDepth = 6, exclude =
       for (const [d, s] of Object.entries(softOf(rule))) { // soft 分层：中置信(≥0.2)→子目标（疑似因果，先建立它——L3 实测 dig 缺 nearType=4 的教训）；低置信→假设
         if (sat1(frame[d], s.v)) continue;
         if (s.conf >= 0.2) sub[d] = s.v;
-        else assumptions.push({ dim: d, cur: frame[d] ?? null, want: s.v, conf: s.conf, action: rule.action, outcome: rule.outcome ?? rule.outcomes });
+        else assumptions.push({ dim: d, cur: frame[d] ?? null, want: s.v, conf: s.conf, action: rule.action, outcomes: rule.outcomes });
       }
       let chain = [];
       if (Object.keys(sub).length) {
@@ -121,7 +119,7 @@ export function planBackward({ rules, current, goalDims, maxDepth = 6, exclude =
     const assumptions = Object.entries(softOf(r))
       .filter(([d, s]) => !sat1(current[d], s.v))
       .map(([d, s]) => ({ dim: d, want: s.v, cur: current[d] ?? null, conf: s.conf }));
-    return { action: r.action, outcome: r.outcome ?? r.outcomes, rho: r.rho ?? null, n: r.n ?? null, missing, assumptions };
+    return { action: r.action, outcomes: r.outcomes, rho: r.rho ?? null, n: r.n ?? null, missing, assumptions };
   }).sort((a, b) => a.missing.length - b.missing.length || ruleScore(b) - ruleScore(a)).slice(0, 5);
   return { status: 'evidence-gap', steps: [], gaps, rules: touching.length };
 }

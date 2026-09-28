@@ -1,5 +1,5 @@
 /** 转向探针 v2：验证镜像 z 修正——看向镜像点行走，应抵达真目标。 */
-import { createBody } from './mind/body.mjs';
+import { createBody } from '../mind/body.mjs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const body = createBody({ username: 'SteerProbe2' });
 await body.ready;

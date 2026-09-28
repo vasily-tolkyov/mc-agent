@@ -14,8 +14,12 @@
  * Δ类语义（结果侧的值）：序数维 = 饱和±3 的有向整数差（"挖原木→logGrip Δ+1"，
  * 与绝对位置无关——规则可迁移的地基）；方位维 = 模 9 环绕 Δ∈[-4,4]；类别维 = 新值。
  *
- * 输出规则：{ action, outcome:{dim:Δ类}, hard, soft, untested, n, support, rho, co,
- *            outcomes/factors（过渡别名，旧消费者兼容——factors=hard∪soft 值视图） }。
+ * 输出规则：{ action, outcomes:{dim:Δ类}（单结果维）, hard, soft, untested, conf, n, support, rho, co, lastTick }。
+ * n = 情节计数（Wilson 区间用）；support = Σ效价权重（重要事件单次顶多次——R3 物化深度用它）。
+ *
+ * 如实标注：本模块是对 R1 情节的符号统计（直方图 + Wilson 区间），不是设计原文中
+ * "网络天然把相似的筛成一堆 / 用网络筛出共同部分再相减"的网络机制；网络机制目前只在
+ * R3 物化后的地形里（证据深度决定势阱深浅）。这是当前实现与设计的已知差距，见 README。
  */
 
 const Q = 0.5; // 中心值量化网格（编码分辨率级；概念中心间距≈1.0 已实测，0.5 足够）
@@ -39,6 +43,16 @@ export function classifyChange(dim, c0, c1) {
   if (kind === 'circ') return wrapCirc(c1 - c0);
   const d = Math.round(c1 - c0);
   return Math.sign(d) * Math.min(3, Math.abs(d));
+}
+
+/** classifyChange 的逆：把规则结果（Δ类/新值）施加到当前中心值上 → 预测的下一中心值。
+ * 规划器前向仿真与 L2 预测核对共用，保证"规则结果的含义"只有一处定义。 */
+export function applyChange(dim, c0, out) {
+  const kind = kindOf(dim);
+  if (kind === 'cat') return out;
+  if (!Number.isFinite(c0)) return c0;
+  if (kind === 'circ') return (((c0 + out) % 9) + 9) % 9;
+  return c0 + out;
 }
 
 /** 概念级变化门：Δ类非零（类别维 = 中心值差超网格） */
@@ -75,8 +89,7 @@ class Cluster {
 }
 
 export class DifferentialExtractor {
-  constructor({ quorum = 3 } = {}) {
-    this.quorum = quorum; // 保留参数外形；v3 的小样本保守由 Wilson 承担
+  constructor() {
     /** 簇：(动作|结果维|Δ类) → Cluster */
     this.clusters = new Map();
     /** 对照臂总账：action → { n, hist(dim→qv→次数), frames(qv 条件帧，ρ 计算用) } */
@@ -91,11 +104,10 @@ export class DifferentialExtractor {
     this.processed = 0;
   }
 
-  /** 规则签名（实验台账兼容接口）：动作+结果维值+hard 因素（中心值 0.5 网格化） */
+  /** 规则签名（实验台账用）：动作+结果维值+hard 因素（中心值 0.5 网格化） */
   static ruleSig(rule) {
-    const f = Object.keys(rule.hard ?? rule.factors ?? {}).sort()
-      .map((d) => `${d}=${qv((rule.hard ?? rule.factors)[d])}`).join(',');
-    const o = Object.keys(rule.outcomes ?? {}).sort().map((d) => `${d}=${qv(rule.outcomes[d])}`).join(',');
+    const f = Object.keys(rule.hard).sort().map((d) => `${d}=${qv(rule.hard[d])}`).join(',');
+    const o = Object.keys(rule.outcomes).sort().map((d) => `${d}=${qv(rule.outcomes[d])}`).join(',');
     return `${rule.action}|${o}|${f}`;
   }
 
@@ -188,19 +200,14 @@ export class DifferentialExtractor {
         if (wilson(cnt, c.n).lo > wilson(baseCnt, A.n).hi) co[h] = { delta: cls, freq: +(cnt / total).toFixed(2) };
       }
       rules.push({
-        action: c.action, outcome: { [c.dim]: c.delta },
+        action: c.action, outcomes: { [c.dim]: c.delta },
         hard, soft, untested: untestedMap, conf: confMap, n: c.n, support: c.salience, rho, co,
-        // 过渡别名（旧消费者兼容期）：outcomes = 单维结果；factors = hard∪soft 合并值视图
-        outcomes: { [c.dim]: c.delta },
-        factors: { ...hard, ...Object.fromEntries(Object.entries(soft).map(([d, s]) => [d, s.v])) },
         lastTick: c.lastTick,
       });
     }
     return rules.sort((a, b) => (b.rho * Math.log2(2 + b.n)) - (a.rho * Math.log2(2 + a.n)) || b.support - a.support);
   }
-
-  /** 反查：结果维命中目标维的规则（规划链反查用） */
-  rulesFor(goalDims) {
-    return this.allRules().filter((r) => goalDims.some((d) => r.outcome[d] !== undefined));
-  }
 }
+
+/** 因素值视图（hard ∪ soft 的值）：R3 物化时两类因素都接因素场→核的边，权重由 conf 区分 */
+export const factorValues = (rule) => ({ ...rule.hard, ...Object.fromEntries(Object.entries(rule.soft ?? {}).map(([d, s]) => [d, s.v])) });

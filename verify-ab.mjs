@@ -3,12 +3,14 @@
  *   - 敢答率（网络敢给确定答案的比例）
  *   - 逐维准确率（变化维命中 + 未变维不误报变化）
  *   - 泛化切片：只看"条件组合在训练集里没出现过"的测试情节（真·新情境泛化）
+ * legacy = energy-network-sim 的样本登记 TransitionMemory：已从 mind-agent 移除，这里只作历史对照
+ * （它就是设计原文反对的"往数据库里写记录"式规则记忆）。
  * 运行：node verify-ab.mjs [episodes路径]
  */
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EpisodeBuffer } from './mind/r1-episodes.mjs';
-import { DifferentialExtractor } from './mind/r2-diff.mjs';
+import { DifferentialExtractor, applyChange } from './mind/r2-diff.mjs';
 import { FactorRuleNet } from './mind/r3-rules.mjs';
 
 const ENS = process.env.ENS_PATH ?? fileURLToPath(new URL('../energy-network-sim', import.meta.url)); // 同级克隆 energy-network-sim，或用 ENS_PATH 指定
@@ -47,7 +49,7 @@ for (const ep of episodes.slice(cut)) {
 
 // ── r123 引擎 ──
 const r1 = new EpisodeBuffer({});
-const r2 = new DifferentialExtractor({ quorum: 3 });
+const r2 = new DifferentialExtractor();
 for (const ep of train) { r1.record(ep.conditions, ep.act, ep.outcomes); }
 for (const ep of r1.recent()) r2.ingest(ep);
 const r3 = new FactorRuleNet(CONCEPT_CAPS, 10);
@@ -56,7 +58,7 @@ for (const ep of train) for (const [d, v] of Object.entries(ep.conditions)) {
   if (!alt.has(d)) alt.set(d, new Set());
   alt.get(d).add(v);
 }
-r3.rebuild(r2.allRules().filter((r) => Object.keys(r.factors).length > 0 && r.support >= 2), alt);
+r3.rebuild(r2.allRules(), alt); // 与 mind-agent.rebuildR3 同一口径
 console.log(`r123：${r3.rules.length} 条物化规则`);
 
 // ── legacy 引擎 ──
@@ -98,8 +100,8 @@ const trainSigs = new Set(train.map((e) => Object.keys(e.conditions).sort().map(
 
 const r123Res = evalEngine('r123', (conds, act) => {
   const p = r3.predict(conds, act, 7);
-  return p.kind === 'usable'
-    ? { kind: 'usable', next: Object.fromEntries(DIMS.map((d) => [d, p.outcomes[d] ?? conds[d]])) }
+  return p.kind === 'usable' // R3 结果是 Δ 类/新值：施加到当前值上才是"预测的下一帧"
+    ? { kind: 'usable', next: Object.fromEntries(DIMS.map((d) => [d, p.outcomes[d] !== undefined ? applyChange(d, conds[d], p.outcomes[d]) : conds[d]])) }
     : { kind: p.kind };
 });
 const legacyRes = evalEngine('legacy', (conds, act) => mem.predict(conds, mem.actions.find((a) => a.values.act === act), 7));

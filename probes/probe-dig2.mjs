@@ -1,10 +1,10 @@
 /** 挖掘探针：复刻课程电池序列（到位→看标本→lookDown→dig），逐步验证掉落。 */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { createBody } from './mind/body.mjs';
-import { raycastForward } from './mind/sensory.mjs';
+import { createBody } from '../mind/body.mjs';
+import { raycastForward } from '../mind/sensory.mjs';
 
-execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))), 'build-flat-map.cjs')], { stdio: 'inherit' });
+execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))), '..', 'build-flat-map.cjs')], { stdio: 'inherit' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const body = createBody({ username: `DG${Date.now() % 100000}` });
 await body.ready;

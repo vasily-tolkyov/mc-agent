@@ -107,7 +107,7 @@ export class ExperimentScheduler {
       if (p.verdict !== '进行中') continue;
       if (p.consecFail >= CONFIRM_FAILS) { this.settle(p, '确认', `变体下结果连续 ${p.consecFail} 次未复现`); continue; }
       const alive = r3.rules.filter((r) => r.action === p.action && outcomeSig(r) === p.outcomeSig);
-      if (p.repro >= 1 && (alive.length === 0 || alive.every((r) => !(p.dim in (r.hard ?? r.factors))))) {
+      if (p.repro >= 1 && (alive.length === 0 || alive.every((r) => !(p.dim in r.hard)))) {
         this.settle(p, '排除', `变体下结果复现 ${p.repro} 次，重建后该维已不在 hard 因素集`);
         continue;
       }

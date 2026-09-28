@@ -66,3 +66,4 @@ for (const seed of [1, 7, 42]) {
     spk.settleAnnealed([0, 1], wells, { seed: 3, levels: 8, sweepsPerLevel: 16 }));
 }
 console.log(allOk ? '\n✓ 退火同种子逐位复现' : '\n✗ 退火存在差异');
+process.exit(allOk ? 0 : 1);

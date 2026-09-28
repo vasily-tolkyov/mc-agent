@@ -1,5 +1,5 @@
 import mineflayer from 'mineflayer';
-import { raycastForward } from './mind/sensory.mjs';
+import { raycastForward } from '../mind/sensory.mjs';
 
 const bot = mineflayer.createBot({ host: '127.0.0.1', port: 25567, username: 'SmokeBot', version: '1.21.4' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -48,7 +48,7 @@ console.log(`A 图像路径：学习后边差异 ${wDiff}（应 0）；石头 se
 const CONCEPT_CAPS = { nearDist: 8, nearType: 13, belowType: 13, grip: 8, logGrip: 8, speed: 8, onGround: 2, viewWell: 14 };
 function buildR1R2() {
   const r1 = new EpisodeBuffer({});
-  const r2 = new DifferentialExtractor({ quorum: 3 });
+  const r2 = new DifferentialExtractor();
   const DIG = 5, OAK = 4, STONE = 3;
   const varies = [
     { nearDist: 1, belowType: 1, speed: 0, viewWell: 0 }, { nearDist: 2, belowType: 1, speed: 0, viewWell: 0 },
@@ -60,7 +60,7 @@ function buildR1R2() {
   for (let i = 0; i < 8; i++) { const v = varies[i % varies.length]; r1.record({ ...v, nearType: STONE, grip: 0, logGrip: 0, onGround: 1 }, DIG, { grip: 1 }); }
   for (let i = 0; i < 4; i++) r1.record({ ...varies[0], nearType: 0, grip: 0, logGrip: 0, onGround: 1 }, 0, { speed: 1 });
   for (const ep of r1.recent()) r2.ingest(ep);
-  return { rules: r2.allRules().filter((r) => Object.keys(r.factors).length > 0 && r.support >= 2), alt: (() => { const m = new Map(); for (const ep of r1.recent()) for (const [d, v] of Object.entries(ep.conditions)) { if (!m.has(d)) m.set(d, new Set()); m.get(d).add(v); } return m; })() };
+  return { rules: r2.allRules(), alt: (() => { const m = new Map(); for (const ep of r1.recent()) for (const [d, v] of Object.entries(ep.conditions)) { if (!m.has(d)) m.set(d, new Set()); m.get(d).add(v); } return m; })() }; // 与 mind-agent.rebuildR3 同一口径：全部规则进地形，深浅由证据决定
 }
 function buildR3(cls, rules, alt) {
   r3mod.setR3NetClass(cls);
@@ -84,7 +84,10 @@ const p2a = R1.predict({ ...novel, nearType: 3 }, 5, 7), p2b = R2.predict({ ...n
 const sameP = (a, b) => a.kind === b.kind && JSON.stringify(a.outcomes) === JSON.stringify(b.outcomes) && a.energy === b.energy;
 console.log(`B R3：建网边差异 W=${wDiff2} Γ=${gDiff2}（应 0）`);
 console.log(`  泛化预测：${p1a.kind}/${JSON.stringify(p1a.outcomes)} E=${p1a.energy} vs ${p1b.kind}/${JSON.stringify(p1b.outcomes)} E=${p1b.energy} → ${sameP(p1a, p1b) ? '一致' : '✗'}`);
-console.log(`  石头预测：${p2a.kind}/${JSON.stringify(p2a.outcomes)} vs ${p2b.kind}/${JSON.stringify(p2b.outcomes)} → ${sameP(p2a, p2b) ? '一致' : '✗'}`);
+const stoneClean = p2a.outcomes?.logGrip === undefined; // 共变读出门：石头情境不得漏出原木簇的 logGrip 副作用
+console.log(`  石头预测：${p2a.kind}/${JSON.stringify(p2a.outcomes)} vs ${p2b.kind}/${JSON.stringify(p2b.outcomes)} → ${sameP(p2a, p2b) ? '一致' : '✗'}${stoneClean ? '（无 logGrip 漏报 ✓）' : '（✗ logGrip 漏报）'}`);
 const plan = planBackward({ rules, current: novel, goalDims: { logGrip: 2 }, maxDepth: 6 });
 console.log(`  反查链（与底座无关，应 found/2 节）：${plan.status}，${plan.steps.length} 节`);
-console.log(wDiff === 0 && wDiff2 === 0 && gDiff2 === 0 && sameP(p1a, p1b) && sameP(p2a, p2b) && eS1.energy === eS2.energy ? '\n✓ 结构层换底语义不变' : '\n✗ 结构层存在差异');
+const ok = wDiff === 0 && wDiff2 === 0 && gDiff2 === 0 && sameP(p1a, p1b) && sameP(p2a, p2b) && eS1.energy === eS2.energy && stoneClean;
+console.log(ok ? '\n✓ 结构层换底语义不变' : '\n✗ 结构层存在差异');
+process.exit(ok ? 0 : 1);

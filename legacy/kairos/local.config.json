@@ -1,5 +1,5 @@
 {
-  "coreDirectory": "../kairos-v5-predictive-agent",
+  "coreDirectory": "../../../kairos-v5-predictive-agent",
   "minecraft": {
     "host": "127.0.0.1",
     "port": 25567,
