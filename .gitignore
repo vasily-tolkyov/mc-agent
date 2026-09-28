@@ -2,3 +2,4 @@ node_modules/
 runs/
 .local-minecraft/
 *.log
+viaproxy/logs/
